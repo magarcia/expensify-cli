@@ -438,6 +438,7 @@ func TestKeyringNamespacesFollowConfigurationDirectory(t *testing.T) {
 	if len(backend.values) != 2 {
 		t.Fatal("configuration directories shared a keyring account")
 	}
+	t.Chdir(filepath.Dir(first.Dir()))
 	wd, err := os.Getwd()
 	must(t, err)
 	relative, err := filepath.Rel(wd, first.Dir())

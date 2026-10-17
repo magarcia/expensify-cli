@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/magarcia/expensify-cli/internal/fault"
@@ -207,14 +208,24 @@ func TestConcurrentSavesAreAtomic(t *testing.T) {
 	stop := make(chan struct{})
 	readerDone := make(chan error, 1)
 	go func() {
+		reads := 0
 		for {
 			select {
 			case <-stop:
-				readerDone <- nil
+				if reads == 0 {
+					readerDone <- errors.New("reader did not observe any credential snapshots")
+				} else {
+					readerDone <- nil
+				}
 				return
 			default:
 			}
 			data, err := os.ReadFile(store.Path())
+			// Windows can deny opening the file briefly while replacing it.
+			const sharingViolation syscall.Errno = 32
+			if runtime.GOOS == "windows" && errors.Is(err, sharingViolation) {
+				continue
+			}
 			if err != nil {
 				readerDone <- err
 				return
@@ -228,6 +239,7 @@ func TestConcurrentSavesAreAtomic(t *testing.T) {
 				readerDone <- errors.New("reader observed mixed credentials")
 				return
 			}
+			reads++
 		}
 	}()
 	var writers sync.WaitGroup
