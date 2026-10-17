@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parent.parent
+LICENSE_NAME = re.compile(r"^(LICENSE|COPYING|NOTICE)([._-].*)?$", re.IGNORECASE)
+
+
+def go(*args, environment=None):
+    return subprocess.check_output(
+        ["go", *args], cwd=ROOT, env=environment, text=True
+    ).strip()
+
+
+def runtime_modules():
+    paths = set()
+    targets = json.loads(go("tool", "dist", "list", "-json"))
+    supported = {"darwin", "linux", "windows"}
+    for target in targets:
+        if target["GOOS"] not in supported or target["GOARCH"] not in {"amd64", "arm64"}:
+            continue
+        environment = os.environ.copy()
+        environment.update(GOOS=target["GOOS"], GOARCH=target["GOARCH"], CGO_ENABLED="0")
+        output = go(
+            "list", "-mod=readonly", "-deps", "-f",
+            "{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}{{end}}{{end}}",
+            "./cmd/expensify", environment=environment,
+        )
+        paths.update(line for line in output.splitlines() if line)
+    data = go("list", "-mod=readonly", "-m", "-json", *sorted(paths))
+    decoder = json.JSONDecoder()
+    modules = []
+    while data:
+        module, end = decoder.raw_decode(data)
+        if module.get("Replace"):
+            raise ValueError("Remove local module replacements before generating release notices.")
+        modules.append(module)
+        data = data[end:].lstrip()
+    return modules
+
+
+def section(title, source, contents):
+    return f"{'=' * 72}\n{title}\nSource: {source}\n\n{contents.strip()}\n\n"
+
+
+def render():
+    output = (
+        "Third-party notices\n\n"
+        "Release binaries include the Go standard library and the modules below.\n"
+        "This file covers the union of dependencies across all six release targets.\n"
+        "Generate it with ./scripts/notices after changing dependencies.\n\n"
+    )
+    output += section(
+        "Go standard library", "https://go.dev/LICENSE",
+        (ROOT / "licenses" / "Go-BSD-3-Clause.txt").read_text(encoding="utf-8"),
+    )
+    for module in runtime_modules():
+        directory = Path(module["Dir"])
+        licenses = sorted(
+            path for path in directory.rglob("*")
+            if path.is_file() and LICENSE_NAME.fullmatch(path.name)
+        )
+        if not licenses:
+            raise ValueError(f"No license notice found for {module['Path']}.")
+        for path in licenses:
+            relative = path.relative_to(directory).as_posix()
+            output += section(
+                f"{module['Path']} {module['Version']} ({relative})",
+                f"https://pkg.go.dev/{module['Path']}@{module['Version']}",
+                path.read_text(encoding="utf-8"),
+            )
+        if module["Path"] == "github.com/zalando/go-keyring":
+            output += section(
+                f"{module['Path']} {module['Version']} (keyring_darwin.go)",
+                f"https://github.com/zalando/go-keyring/blob/{module['Version']}/keyring_darwin.go",
+                "Copyright 2013 Google Inc. All Rights Reserved.\n\n"
+                + (ROOT / "licenses" / "Apache-2.0.txt").read_text(encoding="utf-8"),
+            )
+    return output.rstrip() + "\n"
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate notices for release dependencies.")
+    parser.add_argument("--check", action="store_true", help="Fail if checked-in notices are stale")
+    args = parser.parse_args()
+    expected = render()
+    path = ROOT / "THIRD_PARTY_NOTICES"
+    if args.check:
+        if not path.is_file() or path.read_text(encoding="utf-8") != expected:
+            raise ValueError("THIRD_PARTY_NOTICES is stale. Run just notices and commit the result.")
+    else:
+        path.write_text(expected, encoding="utf-8")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"Dependency notices failed: {error}", file=sys.stderr)
+        sys.exit(1)

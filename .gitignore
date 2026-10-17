@@ -1,0 +1,15 @@
+/bin/
+/dist/
+/coverage.out
+/expensify
+/expensify.exe
+*.test
+.DS_Store
+.env
+.env.*
+!.env.example
+__pycache__/
+/.expensify.json
+/credentials.json
+/.browser-login-*/
+/gitleaks*.json

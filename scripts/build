@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+
+import argparse
+from datetime import datetime, timezone
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+import tarfile
+import tempfile
+import zipfile
+
+
+ROOT = Path(__file__).resolve().parent.parent
+PLATFORMS = (
+    ("darwin", "amd64"),
+    ("darwin", "arm64"),
+    ("linux", "amd64"),
+    ("linux", "arm64"),
+    ("windows", "amd64"),
+    ("windows", "arm64"),
+)
+COMPLETIONS = {
+    "bash": "completions/expensify.bash",
+    "zsh": "completions/_expensify",
+    "fish": "completions/expensify.fish",
+    "powershell": "completions/expensify.ps1",
+}
+
+
+def git(*args):
+    result = subprocess.run(
+        ["git", *args], cwd=ROOT, capture_output=True, text=True, check=False
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def metadata():
+    values = {
+        "version": os.environ.get("VERSION")
+        or git("describe", "--tags", "--exact-match", "HEAD")
+        or "dev",
+        "commit": os.environ.get("COMMIT") or git("rev-parse", "HEAD") or "unknown",
+        "date": os.environ.get("BUILD_DATE")
+        or git("log", "-1", "--format=%cI")
+        or "unknown",
+    }
+    for name, value in values.items():
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:+-]*", value):
+            raise ValueError(f"Invalid {name}: use letters, numbers, '.', '_', ':', '+', or '-'.")
+    return values
+
+
+def go_env(name):
+    return subprocess.check_output(
+        ["go", "env", name], cwd=ROOT, text=True
+    ).strip()
+
+
+def build(destination, values, platform=None):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    environment["CGO_ENABLED"] = "0"
+    if platform:
+        environment["GOOS"], environment["GOARCH"] = platform
+        environment["GOAMD64"] = "v1"
+        environment["GOARM64"] = "v8.0"
+    ldflags = ["-s", "-w", *(f"-X=main.{name}={value}" for name, value in values.items())]
+    subprocess.run(
+        [
+            "go", "build", "-mod=readonly", "-trimpath", "-buildvcs=false",
+            "-ldflags", " ".join(ldflags), "-o", str(destination), "./cmd/expensify",
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=True,
+    )
+
+
+def archive_name(version, platform):
+    goos, goarch = platform
+    extension = ".zip" if goos == "windows" else ".tar.gz"
+    return f"expensify_{version}_{goos}_{goarch}{extension}"
+
+
+def common_files():
+    names = ["README.md", "LICENSE", "THIRD_PARTY_NOTICES", "skills/expensify/SKILL.md"]
+    policies = ("CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md")
+    names.extend(name for name in policies if (ROOT / name).exists())
+    if (ROOT / "docs").is_symlink():
+        raise ValueError("Release documentation must not be a symlink.")
+    names.extend(path.relative_to(ROOT).as_posix() for path in sorted((ROOT / "docs").rglob("*.md")))
+    files = []
+    for name in names:
+        path = ROOT / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Required release file is missing or not a regular file: {name}")
+        files.append((path, name))
+    return files
+
+
+def digest(path):
+    checksum = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            checksum.update(chunk)
+    return checksum.hexdigest()
+
+
+def validate_destination(destination, names):
+    if destination.is_symlink():
+        raise ValueError("Release output directory must not be a symlink.")
+    if destination.exists():
+        if not destination.is_dir():
+            raise ValueError("Release output must be a directory.")
+        for path in destination.iterdir():
+            if path.name not in names or path.is_symlink() or not path.is_file():
+                raise ValueError(
+                    f"Unexpected release output: {path.name}. Use a separate --output-dir "
+                    "or run just clean to remove generated bin/, dist/, and coverage.out."
+                )
+
+
+def archive_time(values):
+    date = values["date"]
+    if date == "unknown":
+        return 0
+    try:
+        parsed = datetime.fromisoformat(date.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("missing timezone")
+        timestamp = int(parsed.timestamp())
+        if timestamp < 0 or timestamp > 0xFFFFFFFF:
+            raise ValueError("timestamp outside archive range")
+        return timestamp
+    except ValueError as error:
+        raise ValueError("BUILD_DATE must be an ISO 8601 timestamp with a timezone, or unknown.") from error
+
+
+def archive_mode(name):
+    return 0o755 if name in ("expensify", "expensify.exe") else 0o644
+
+
+def write_archive(archive, files, timestamp):
+    if archive.suffix == ".zip":
+        date = datetime.fromtimestamp(max(315532800, min(timestamp, 4354819198)), timezone.utc)
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+            for path, name in files:
+                entry = zipfile.ZipInfo(name, date.timetuple()[:6])
+                entry.create_system = 3
+                entry.external_attr = (stat.S_IFREG | archive_mode(name)) << 16
+                output.writestr(entry, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
+    else:
+        with archive.open("wb") as raw:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=timestamp) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w", format=tarfile.USTAR_FORMAT) as output:
+                    for path, name in files:
+                        entry = tarfile.TarInfo(name)
+                        entry.size = path.stat().st_size
+                        entry.mode = archive_mode(name)
+                        entry.mtime = timestamp
+                        with path.open("rb") as source:
+                            output.addfile(entry, source)
+
+
+def release(values, destination):
+    names = {archive_name(values["version"], platform) for platform in PLATFORMS} | {"checksums.txt"}
+    validate_destination(destination, names)
+    files = common_files()
+    timestamp = archive_time(values)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Publish only after every platform builds; a failed cross-build preserves the last release.
+    with tempfile.TemporaryDirectory(prefix=".expensify-release-", dir=destination.parent) as temporary:
+        stage = Path(temporary)
+        host = (go_env("GOHOSTOS"), go_env("GOHOSTARCH"))
+        native = stage / "host" / ("expensify.exe" if host[0] == "windows" else "expensify")
+        build(native, values, host)
+        completion_files = []
+        for shell, name in COMPLETIONS.items():
+            path = stage / name
+            path.parent.mkdir(exist_ok=True)
+            script = subprocess.check_output([str(native), "completion", shell], cwd=ROOT)
+            if not script.strip():
+                raise ValueError(f"Empty {shell} completion script.")
+            path.write_bytes(script)
+            completion_files.append((path, name))
+        archives = []
+        for platform in PLATFORMS:
+            goos, goarch = platform
+            binary = stage / goos / goarch / ("expensify.exe" if goos == "windows" else "expensify")
+            if platform == host:
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(native, binary)
+            else:
+                build(binary, values, platform)
+            details = stage / "release.json"
+            details.write_text(
+                json.dumps({**values, "goos": goos, "goarch": goarch}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            archive = stage / archive_name(values["version"], platform)
+            archive_files = [(binary, binary.name), *files, *completion_files, (details, "release.json")]
+            write_archive(archive, archive_files, timestamp)
+            archives.append(archive)
+        checksums = stage / "checksums.txt"
+        checksums.write_text("".join(f"{digest(path)}  {path.name}\n" for path in sorted(archives)), encoding="utf-8")
+        verify(stage, release_only=True)
+        validate_destination(destination, names)
+        destination.mkdir(exist_ok=True)
+        for path in [*archives, checksums]:
+            target = destination / path.name
+            os.replace(path, target)
+            print(target)
+
+
+def verify_binary(data, platform):
+    goos, goarch = platform
+    valid = False
+    if goos == "darwin" and len(data) >= 8:
+        machine = {"amd64": 0x1000007, "arm64": 0x100000C}[goarch]
+        valid = data[:4] == b"\xcf\xfa\xed\xfe" and struct.unpack_from("<I", data, 4)[0] == machine
+    elif goos == "linux" and len(data) >= 20:
+        machine = {"amd64": 62, "arm64": 183}[goarch]
+        valid = data[:6] == b"\x7fELF\x02\x01" and struct.unpack_from("<H", data, 18)[0] == machine
+    elif goos == "windows" and len(data) >= 64 and data[:2] == b"MZ":
+        offset = struct.unpack_from("<I", data, 60)[0]
+        machine = {"amd64": 0x8664, "arm64": 0xAA64}[goarch]
+        valid = (
+            offset <= len(data) - 6
+            and data[offset:offset + 4] == b"PE\x00\x00"
+            and struct.unpack_from("<H", data, offset + 4)[0] == machine
+        )
+    if not valid:
+        raise ValueError(f"Binary format or architecture does not match {goos}/{goarch}.")
+
+
+def archive_contents(path):
+    if path.suffix == ".zip":
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            if len({entry.filename for entry in entries}) != len(entries):
+                raise ValueError(f"Duplicate archive entries: {path.name}")
+            if any(stat.S_IFMT(entry.external_attr >> 16) != stat.S_IFREG for entry in entries):
+                raise ValueError(f"Non-regular archive entries: {path.name}")
+            if any(stat.S_IMODE(entry.external_attr >> 16) != archive_mode(entry.filename) for entry in entries):
+                raise ValueError(f"Unexpected archive permissions: {path.name}")
+            return {entry.filename: archive.read(entry) for entry in entries}
+    with tarfile.open(path, "r:gz") as archive:
+        entries = archive.getmembers()
+        if len({entry.name for entry in entries}) != len(entries):
+            raise ValueError(f"Duplicate archive entries: {path.name}")
+        if any(not entry.isfile() or entry.uid != 0 or entry.gid != 0 for entry in entries):
+            raise ValueError(f"Non-regular or non-normalized archive entries: {path.name}")
+        if any(entry.mode != archive_mode(entry.name) for entry in entries):
+            raise ValueError(f"Unexpected archive permissions: {path.name}")
+        return {entry.name: archive.extractfile(entry).read() for entry in entries}
+
+
+def verify(destination, release_only=False):
+    checksums = destination / "checksums.txt"
+    if checksums.is_symlink() or not checksums.is_file():
+        raise ValueError("Release checksums.txt is missing or not a regular file.")
+    records = {}
+    for line in checksums.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(
+            r"([0-9a-f]{64})  (expensify_[A-Za-z0-9._:+-]+_"
+            r"(?:darwin|linux|windows)_(?:amd64|arm64)\.(?:tar\.gz|zip))",
+            line,
+        )
+        if not match or match[2] in records:
+            raise ValueError("Malformed or duplicate release checksum entry.")
+        records[match[2]] = match[1]
+    if len(records) != len(PLATFORMS):
+        raise ValueError("Release must contain exactly six platform archives.")
+    if not release_only:
+        validate_destination(destination, set(records) | {"checksums.txt"})
+    shared_metadata = None
+    expected_common = {name for _, name in common_files()} | set(COMPLETIONS.values()) | {"release.json"}
+    for name, expected_digest in records.items():
+        path = destination / name
+        if path.is_symlink() or not path.is_file() or digest(path) != expected_digest:
+            raise ValueError(f"Missing archive or checksum mismatch: {name}")
+        contents = archive_contents(path)
+        try:
+            details = json.loads(contents["release.json"])
+            platform = details["goos"], details["goarch"]
+            version = details["version"]
+            current_metadata = {key: details[key] for key in ("version", "commit", "date")}
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ValueError(f"Invalid release metadata: {name}") from error
+        if platform not in PLATFORMS or archive_name(version, platform) != name:
+            raise ValueError(f"Archive name does not match release metadata: {name}")
+        if shared_metadata is not None and shared_metadata != current_metadata:
+            raise ValueError("Platform archives contain inconsistent release metadata.")
+        shared_metadata = current_metadata
+        binary = "expensify.exe" if platform[0] == "windows" else "expensify"
+        if set(contents) != expected_common | {binary}:
+            raise ValueError(f"Unexpected or missing archive contents: {name}")
+        if any(not contents[entry].strip() for entry in expected_common):
+            raise ValueError(f"Empty release documentation, completions, or metadata: {name}")
+        verify_binary(contents[binary], platform)
+    if {archive_name(shared_metadata["version"], platform) for platform in PLATFORMS} != set(records):
+        raise ValueError("Release is missing an expected platform archive.")
+    if not release_only:
+        print(f"Verified six platform archives, contents, architectures, and SHA-256 checksums in {destination}.")
+
+
+def clean():
+    for name in ("bin", "dist"):
+        path = ROOT / name
+        if path.is_symlink():
+            path.unlink()
+        elif path.exists():
+            shutil.rmtree(path)
+    (ROOT / "coverage.out").unlink(missing_ok=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Build and package the Expensify CLI.")
+    parser.add_argument("command", choices=("build", "install", "release", "verify", "clean"))
+    parser.add_argument(
+        "--output-dir", type=Path, default=ROOT / "dist",
+        help="Release output directory (release or verify).",
+    )
+    args = parser.parse_args()
+    if args.command == "clean":
+        clean()
+        return
+    if args.command == "verify":
+        verify(args.output_dir.absolute())
+        return
+    values = metadata()
+    if args.command == "release":
+        release(values, args.output_dir.absolute())
+        return
+    name = "expensify.exe" if go_env("GOOS") == "windows" else "expensify"
+    if args.command == "install":
+        gobin = go_env("GOBIN")
+        destination = Path(gobin) if gobin else Path(go_env("GOPATH").split(os.pathsep)[0]) / "bin"
+    else:
+        destination = ROOT / "bin"
+    build(destination / name, values)
+    print(destination / name)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.CalledProcessError, tarfile.TarError, zipfile.BadZipFile) as error:
+        print(f"Build failed: {error}", file=sys.stderr)
+        sys.exit(1)

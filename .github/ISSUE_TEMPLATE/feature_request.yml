@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a CLI workflow or improvement.
+title: "feature: "
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: What are you trying to do?
+      description: Describe the workflow and what's missing from the current commands. Use synthetic examples without account or financial data.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Proposed command or behavior
+      description: Show a command example and the result you'd expect. Mention whether you're using the CLI interactively or from an agent or script.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround
+      description: Describe alternatives you've tried, if any.

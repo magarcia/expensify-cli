@@ -1,0 +1,207 @@
+package cli
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/magarcia/expensify-cli/internal/expensify"
+)
+
+func (a *application) rootHelp(commands []expensify.Spec, full bool) error {
+	_, err := fmt.Fprintln(a.out, `expensify — New Expensify from your terminal
+
+Examples:
+  expensify auth login
+  expensify workspace list
+  expensify expense list --output json
+  expensify report list --output llm
+
+Usage: expensify <resource> <action> [flags]
+
+Resources:`)
+	if err != nil {
+		return err
+	}
+	for _, noun := range nouns(commands) {
+		if noun == "help" || noun == "completion" {
+			continue
+		}
+		var verbs []string
+		for _, cmd := range commands {
+			words := strings.Fields(cmd.Name)
+			if words[0] == noun {
+				verbs = append(verbs, words[1])
+			}
+		}
+		if _, err = fmt.Fprintf(a.out, "  %-12s %s\n", noun, strings.Join(verbs, ", ")); err != nil {
+			return err
+		}
+	}
+	if _, err = fmt.Fprintln(a.out, "  completion   Generate bash, zsh, fish, or powershell completions"); err != nil {
+		return err
+	}
+	if full {
+		if _, err = fmt.Fprintln(a.out, "\nGlobal flags:\n"+globalHelp); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintln(a.out, "\nRun 'expensify <resource> <action> --help' for command examples.\nHelp topics: expensify help auth | environment | exit-codes")
+	return err
+}
+
+func (a *application) nounHelp(commands []expensify.Spec, noun string) error {
+	if _, err := fmt.Fprintf(a.out, "Usage: expensify %s <action> [flags]\n\nActions:\n", noun); err != nil {
+		return err
+	}
+	for _, cmd := range commands {
+		words := strings.Fields(cmd.Name)
+		if words[0] == noun {
+			if _, err := fmt.Fprintf(a.out, "  %-12s %s\n", words[1], cmd.Summary); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := fmt.Fprintf(a.out, "\nRun 'expensify %s <action> --help' for examples and flags.\n", noun)
+	return err
+}
+
+func (a *application) commandHelp(cmd expensify.Spec) error {
+	if _, err := fmt.Fprintf(a.out, "%s\n\nExample:\n  %s\n\nUsage: expensify %s [flags]\n", cmd.Summary, cmd.Example, cmd.Name); err != nil {
+		return err
+	}
+	if len(cmd.Flags) > 0 {
+		if _, err := fmt.Fprintln(a.out, "\nCommand flags:"); err != nil {
+			return err
+		}
+		for _, flag := range cmd.Flags {
+			name := "--" + flag.Name
+			if !flag.Bool {
+				name += " <value>"
+			}
+			note := ""
+			if flag.Required {
+				note = " (required)"
+			} else if flag.Default != "" {
+				note = fmt.Sprintf(" (default %q)", flag.Default)
+			}
+			if _, err := fmt.Fprintf(a.out, "  %-30s %s%s\n", name, flag.Usage, note); err != nil {
+				return err
+			}
+		}
+	}
+	if cmd.Confirm {
+		if _, err := fmt.Fprintln(a.out, "\nThis action requires confirmation. Use --dry-run to preview and --yes for automation."); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintln(a.out, "\nGlobal flags:\n"+globalHelp)
+	return err
+}
+
+const globalHelp = `  -h, --help                     Show help without authentication
+      --version                  Show version, commit, and build date
+  -o, --output <format>           auto, text, json, llm (default auto)
+      --json                     Shorthand for --output json
+  -v, --verbose                  Show additional diagnostics
+  -q, --quiet                    Suppress nonessential messages
+      --no-color                 Disable color and animated progress
+      --no-input                 Never prompt for input
+  -y, --yes                      Skip action confirmations
+      --dry-run                  Validate and preview without API calls
+      --config-dir <path>        Private settings and credential directory
+      --timeout <duration>       Request timeout (default 30s)`
+
+func helpTopic(topic string) string {
+	switch topic {
+	case "auth":
+		return `New Expensify authentication
+
+Examples:
+  expensify auth login
+  expensify auth login --browser chrome --login-timeout 10m
+  expensify auth login --manual
+  expensify auth login --credentials-file /path/to/credentials.json
+  secret-manager read expensify | expensify auth login --credentials-stdin
+  expensify auth status --check
+  expensify auth logout
+
+The default interactive login opens an installed Chrome-compatible browser in a
+separate temporary profile. Sign in there; the CLI captures your device credentials,
+verifies them with Expensify, and saves them. The login window closes automatically.
+Chrome, Chromium, Edge, and Brave are supported. Safari and Firefox aren't.
+Use --browser with a browser name or executable path to choose a browser explicitly.
+Your normal browser profile and existing windows are left alone.
+
+Browser sign-in has a separate five-minute limit, adjustable with --login-timeout.
+--no-input never opens a browser implicitly. To request a browser explicitly from a
+script, use --browser auto. Headless use should import credentials or use environment
+variables. Imported credentials and environment credentials don't open a browser.
+
+For manual login, use --manual and copy autoGeneratedLogin and autoGeneratedPassword
+from an authenticated app's stored credentials record. Both prompts hide input.
+Never paste device credentials into a shell command.
+
+Supported JSON fields:
+  {"partnerUserID":"...","partnerUserSecret":"..."}
+  {"autoGeneratedLogin":"...","autoGeneratedPassword":"..."}
+  {"authToken":"..."}
+Fields may also be nested under credentials, session, or DEVICE_SESSION_CREDENTIALS;
+a nested JSON string is accepted. Login verifies credentials before saving them.
+
+Device credentials renew expired session tokens automatically after API code 407.
+Expensify does not provide a guaranteed lifetime. Token-only sessions cannot renew.
+Credentials use your OS keyring when available. Existing credential files migrate
+to the keyring after a successful read. If the keyring cannot save credentials,
+the default auto mode uses a plaintext file with private access permissions
+(0600 in a 0700 directory on macOS/Linux; a user-only ACL on Windows).
+Set EXPENSIFY_CREDENTIAL_STORE=keyring to require the keyring without file fallback,
+or =file to select private file storage. Auth status reports the actual storage.
+Authentication environment variables override the saved account. Logout removes
+keyring and file credentials; file mode removes only the file. Logout does not
+revoke credentials at Expensify or clear environment variables. Never share
+credential files or developer tools exports.`
+	case "environment":
+		return `Environment and configuration
+
+Precedence: flags > environment > .expensify.json > user settings > defaults.
+Authentication comes from environment credentials or saved keyring/file credentials.
+
+  EXPENSIFY_AUTH_TOKEN            New Expensify session token
+  EXPENSIFY_PARTNER_USER_ID       Device login (set with device secret)
+  EXPENSIFY_PARTNER_USER_SECRET   Device secret (set with device login)
+  EXPENSIFY_CREDENTIAL_STORE      auto (keyring with file fallback), keyring, or file
+  EXPENSIFY_CONFIG_DIR            Private configuration directory
+  XDG_CONFIG_HOME                 Base directory (default ~/.config)
+  EXPENSIFY_OUTPUT                auto, text, json, llm
+  EXPENSIFY_POLICY_ID             Default workspace/policy ID
+  EXPENSIFY_CURRENCY              Default currency for new expenses
+  EXPENSIFY_TIMEOUT               Request duration (default 30s)
+  NO_COLOR                       Disable color
+
+User settings: ~/.config/expensify/config.json.
+Fallback credentials: ~/.config/expensify/credentials.json (plaintext, private access).
+Keyring entries are separate for each configuration directory. Strict keyring mode
+fails if the keyring is unavailable; file mode never accesses the keyring.
+Project .expensify.json accepts output, policyID, currency, timeout. Never put
+credentials in a project file. Environment credentials are never saved by ordinary
+resource commands; auth login explicitly saves a verified session.`
+	case "exit-codes":
+		return `Exit codes
+
+  0    Success
+  1    General or local I/O error
+  2    Invalid usage or confirmation required
+  3    Authentication failed or missing
+  4    Resource not found
+  5    Permission denied
+  10   Network or remote service failure
+  130  Interrupted (SIGINT)
+  143  Terminated (SIGTERM)
+
+Errors go to stderr. With --output json they use:
+  {"error":{"code":"AUTH-001","message":"...","hint":"..."}}
+Data goes to stdout. Piped auto output uses plain text/TSV; --output json keeps
+the stable JSON representation. Mutations are not retried after transport errors.`
+	}
+	return ""
+}

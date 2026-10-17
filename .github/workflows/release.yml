@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require a semantic version tag
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          number='(0|[1-9][0-9]*)'
+          identifier="($number|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+          version="^v$number\\.$number\\.$number(-$identifier(\\.$identifier)*)?$"
+          if [[ ! "$VERSION" =~ $version ]]; then
+            printf 'Invalid release tag: %s. Use v1.2.3 or v1.2.3-rc.1.\n' "$VERSION" >&2
+            exit 1
+          fi
+
+  check:
+    name: Verify release
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+    with:
+      skip-release-snapshot: true
+
+  release:
+    name: Publish release
+    needs: [validate, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ github.ref_name }}
+      COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: '1.59.0'
+      - name: Build archives
+        run: just release
+      - name: Verify archive contents and checksums
+        run: just release-verify
+      - name: Attest public release assets
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          create-storage-record: false
+      - name: Publish GitHub release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          flags=(--verify-tag --generate-notes --title "$VERSION")
+          if [[ "$VERSION" == *-* ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$VERSION" "${flags[@]}" dist/*.tar.gz dist/*.zip dist/checksums.txt
