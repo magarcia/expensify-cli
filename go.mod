@@ -9,7 +9,7 @@ require (
 	github.com/zalando/go-keyring v0.2.8
 )
 
-require golang.org/x/sys v0.42.0
+require golang.org/x/sys v0.49.0
 
 require (
 	github.com/danieljoos/wincred v1.2.3 // indirect
