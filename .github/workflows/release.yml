@@ -91,3 +91,44 @@ jobs:
             flags+=(--prerelease --latest=false)
           fi
           gh release create "$VERSION" "${flags[@]}" dist/*.tar.gz dist/*.zip dist/checksums.txt
+
+  verify-publication:
+    name: Verify published assets
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ github.ref_name }}
+      COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: '1.59.0'
+      - name: Download and verify all published archives
+        run: |
+          gh release download "$VERSION" --dir dist
+          just release-verify
+      - name: Verify public asset provenance
+        if: ${{ !github.event.repository.private }}
+        run: |
+          for asset in dist/*; do
+            gh attestation verify "$asset" --repo "$GH_REPO"
+          done
+      - name: Smoke-test the published Linux binary
+        run: |
+          smoke_dir="$(mktemp -d)"
+          tar -xzf "dist/expensify_${VERSION}_linux_amd64.tar.gz" -C "$smoke_dir"
+          version_info="$("$smoke_dir/expensify" --version)"
+          printf '%s\n' "$version_info"
+          [[ "$version_info" == "expensify $VERSION (commit $COMMIT, built "* ]]
+          "$smoke_dir/expensify" --help > /dev/null
+          "$smoke_dir/expensify" expense create --amount 1250 --merchant Cafe \
+            --dry-run --no-input --output llm

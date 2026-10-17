@@ -64,8 +64,9 @@ def render():
     for module in runtime_modules():
         directory = Path(module["Dir"])
         licenses = sorted(
-            path for path in directory.rglob("*")
-            if path.is_file() and LICENSE_NAME.fullmatch(path.name)
+            (path for path in directory.rglob("*")
+             if path.is_file() and LICENSE_NAME.fullmatch(path.name)),
+            key=lambda path: path.relative_to(directory).as_posix(),
         )
         if not licenses:
             raise ValueError(f"No license notice found for {module['Path']}.")

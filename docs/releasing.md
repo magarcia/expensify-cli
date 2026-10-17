@@ -81,6 +81,8 @@ Pushing the tag authorizes automatic publication. The release workflow runs chec
 
 The workflow publishes stable tags as normal releases and prerelease tags as prereleases. Prereleases don't replace the latest stable release. GitHub generates the release notes using the checked-in release-note configuration. Review the published notes and add installation, compatibility, or behavior details when generated pull request titles need context. See [GitHub's release documentation](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository).
 
+A separate job downloads all published assets and verifies their contents, checksums, and public provenance attestations. It runs the packaged Linux binary to check its version, help, and a dry-run command with `--output llm`.
+
 ## Release contents
 
 | Platform | Architectures | Format |
@@ -105,6 +107,8 @@ SHA-256 verification checks that the downloaded file matches the release list. A
 ## Failures and corrections
 
 Inspect the failed job in the repository's **Actions** tab. Fix source failures in a new commit and use a new version tag. If a job failed because of a temporary service or runner problem, rerun it from Actions for the same tag.
+
+If only **Verify published assets** fails, the release already exists. Inspect the failure and rerun that job for a temporary service issue. Don't rerun publication or replace the assets.
 
 Don't overwrite a published version or replace its binaries. Publish a patch version for a fix. If a release has a security issue, follow [SECURITY.md](../SECURITY.md) and explain the affected versions in the release notes.
 

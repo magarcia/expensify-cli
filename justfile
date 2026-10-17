@@ -35,9 +35,9 @@ fmt-check:
 # Run the checks required before submitting a change.
 check: fmt-check vet test packaging-test notices-check build
 
-# Check archive contents, metadata, reproducibility, and failure handling.
+# Check archives, dependency notices, reproducibility, and failure handling.
 packaging-test:
-    @python3 -m unittest discover -s scripts -p 'test_build.py'
+    @python3 -m unittest discover -s scripts -p 'test_*.py'
 
 # Regenerate bundled Go and dependency license notices.
 notices:
