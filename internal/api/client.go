@@ -115,6 +115,16 @@ func (c *Client) Call(ctx context.Context, command string, params url.Values) (m
 	})
 }
 
+// Read identifies commands routed through Expensify's API.read interface.
+func (c *Client) Read(ctx context.Context, command string, params url.Values) (map[string]any, error) {
+	readParams := make(url.Values, len(params)+1)
+	for key, values := range params {
+		readParams[key] = append([]string(nil), values...)
+	}
+	readParams.Set("apiRequestType", "read")
+	return c.Call(ctx, command, readParams)
+}
+
 func (c *Client) execute(ctx context.Context, command string, request func(string) (map[string]any, int, error)) (map[string]any, error) {
 	if !validCommand(command) {
 		return nil, fault.Usage("The API command must contain only letters and numbers, starting with a letter.")

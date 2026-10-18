@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math/big"
 	"net/url"
 	"sort"
@@ -40,15 +42,7 @@ func (s *Service) Execute(ctx context.Context, noun, verb string, values map[str
 	case "expense view":
 		return s.viewExpense(ctx, values)
 	case "report view":
-		state, err := s.openReport(ctx, values["report-id"])
-		if err != nil {
-			return nil, err
-		}
-		raw := object(state["report_"+values["report-id"]])
-		if raw == nil {
-			return nil, notFound("Report", values["report-id"])
-		}
-		return report(values["report-id"], raw)
+		return s.viewReport(ctx, values)
 	case "workspace list", "workspace view":
 		return s.workspaces(ctx, verb, values)
 	case "category list", "tag list":
@@ -94,6 +88,8 @@ func (s *Service) Execute(ctx context.Context, noun, verb string, values map[str
 		return Mutation{ID: values["expense-id"], Action: "receipt_attached"}, nil
 	case "report create":
 		return s.createReport(ctx, values)
+	case "report edit":
+		return s.setReportNotes(ctx, values["report-id"], values["notes"])
 	case "report submit", "report approve", "report comment":
 		return s.reportAction(ctx, verb, values)
 	}
@@ -157,21 +153,9 @@ func (s *Service) workspaces(ctx context.Context, verb string, values map[string
 }
 
 func (s *Service) namedItems(ctx context.Context, noun string, values map[string]string) ([]NamedItem, error) {
-	command, prefix := "GetPolicyCategories", "policyCategories_"
-	if noun == "tag" {
-		command, prefix = "OpenPolicyTagsPage", "policyTags_"
-	}
-	state, err := s.snapshot(ctx, command, url.Values{"policyID": {values["policy-id"]}})
+	collection, err := s.policyItems(ctx, noun, values["policy-id"])
 	if err != nil {
 		return nil, err
-	}
-	raw, ok := state[prefix+values["policy-id"]]
-	if !ok {
-		return nil, unexpected("workspace categories or tags are missing")
-	}
-	collection := onyxObject(raw)
-	if collection == nil {
-		return nil, unexpected("workspace categories or tags are not an object")
 	}
 	items := []NamedItem{}
 	for key, value := range collection {
@@ -342,6 +326,7 @@ func (s *Service) deleteExpense(ctx context.Context, values map[string]string) (
 }
 
 func (s *Service) createReport(ctx context.Context, values map[string]string) (Mutation, error) {
+	_, hasNotes := values["notes"]
 	if policyID := values["policy-id"]; policyID != "" {
 		state, err := s.openApp(ctx)
 		if err != nil {
@@ -354,6 +339,11 @@ func (s *Service) createReport(ctx context.Context, values map[string]string) (M
 		// CreateAppReport has no option to defer an instant-submit policy.
 		if boolean(policy["autoReporting"]) && text(policy["autoReportingFrequency"]) == "instant" && text(policy["approvalMode"]) != "optional" {
 			return Mutation{}, fault.New("API-405", "This workspace can immediately submit newly created reports.", "Choose an existing draft report or change the workspace's submission schedule. No report was created.", 4)
+		}
+		if hasNotes {
+			if _, err := prepareReportNotes(state, map[string]any{"type": "expense", "policyID": policyID}, values["notes"]); err != nil {
+				return Mutation{}, err
+			}
 		}
 	}
 	ids, err := newIDs(53, 63, 63)
@@ -368,6 +358,18 @@ func (s *Service) createReport(ctx context.Context, values map[string]string) (M
 	}
 	if _, err := s.client.Call(ctx, "CreateAppReport", params); err != nil {
 		return Mutation{}, err
+	}
+	if hasNotes {
+		if _, err := s.setReportNotes(ctx, ids[0], values["notes"]); err != nil {
+			message := fmt.Sprintf("Report %s was created, but its Notes could not be saved.", ids[0])
+			exit := 1
+			var failure *fault.Error
+			if errors.As(err, &failure) {
+				message += " " + failure.Message
+				exit = failure.Exit
+			}
+			return Mutation{}, fault.New("API-006", message, fmt.Sprintf("Do not create another report. Inspect expensify report view --report-id %s, then retry expensify report edit --report-id %s --notes '<text>'.", ids[0], ids[0]), exit)
+		}
 	}
 	return Mutation{ID: ids[0], Action: "created"}, nil
 }

@@ -62,10 +62,23 @@ If the monthly draft doesn't exist, create it:
 
 ```sh
 expensify report create --policy-id YOUR_POLICY_ID --name 'October expenses' \
+  --notes 'Health, Software License, Books, Courses & Internet' \
   --no-input --output llm
 ```
 
 Before creating a workspace report, the CLI reads its policy and refuses the known instant-submit combination: `autoReporting=true`, `autoReportingFrequency=instant`, and an `approvalMode` other than `optional`. The report-creation API has no option to defer that immediate submission. Other workspace submission schedules still apply.
+
+`--notes` sets the workspace's text report field named Notes. `report create --notes` requires `--policy-id`; the CLI checks that the workspace has one unambiguous text Notes field before creating the report. Creating the report and saving its Notes require separate requests. If the Notes request fails after creation, the error identifies the created report. Inspect it and retry `report edit` with that ID instead of creating another report.
+
+Update an existing report's Notes with `report edit`. Preview the change first:
+
+```sh
+expensify report edit --report-id 456 \
+  --notes 'Health, Software License, Books, Courses & Internet' \
+  --dry-run --no-input --output llm
+```
+
+Remove `--dry-run` to save the Notes. The report must be your own draft expense report with one text Notes field. Use `--notes=''` to clear optional Notes; required fields reject empty or whitespace-only text. Read `notes` from `report view` to check the result.
 
 Use the selected or returned report ID below. Inspect its workspace, owner, and draft state, and list valid category and tag names:
 
@@ -126,6 +139,14 @@ Expense and report lists return a page:
 
 `items` is always an array, including for empty results. Increase `--offset` by the returned `limit` while `has_more` is true. The default limit is `100`; supported values are `1` through `1000`.
 
+Workspace, category, and tag lists return a bare array without pagination metadata. Empty results are `[]`. For example, read workspace IDs with:
+
+```sh
+expensify workspace list --no-input --output json | jq -r '.[].id'
+```
+
+If a workspace's member picker endpoint rejects a category or tag request, the CLI reads the complete policy through Expensify's policy API. Both paths preserve disabled entries and tag group names.
+
 Views return one object. Mutations return an affected resource ID and action, for example `{"id":"123","action":"created"}`. Expense mutations can also include `report_id` when the destination is known:
 
 ```json
@@ -137,11 +158,13 @@ Treat `report_id` as optional; don't infer that an expense is personal just beca
 | Resource | Fields |
 | --- | --- |
 | Expense | `id`, `report_id`, `amount`, `currency`, `merchant`, `date`, `comment`, `category`, `tag`, `billable`, `reimbursable`, `receipt` |
-| Report | `id`, `name`, `policy_id`, `type`, `total`, `currency`, `state`, `status`, `owner_account_id`, `manager_id` |
+| Report | `id`, `name`, `notes`, `policy_id`, `type`, `total`, `currency`, `state`, `status`, `owner_account_id`, `manager_id` |
 | Workspace | `id`, `name`, `type`, `currency`, `role`, `owner` |
 | Category or tag | `name`, `enabled`, `group` |
 
 Optional fields can be absent. `receipt` preserves the server's receipt metadata. Report `state` and `status` preserve upstream values as strings. Consumers should tolerate additional fields.
+
+In `report view`, `notes` is always a string, including `""` when the report's Notes are empty or absent. It contains the Notes report field's value or default text. Report lists omit this field because Search doesn't provide complete Notes metadata.
 
 For example, extract expense IDs with `jq`:
 

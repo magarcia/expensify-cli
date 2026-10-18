@@ -81,11 +81,14 @@ Find or create a monthly draft:
 expensify report list --policy-id YOUR_POLICY_ID --status drafts
 
 # Create this report only if you don't already have the draft you need.
-expensify report create --name 'October expenses' --policy-id YOUR_POLICY_ID
+expensify report create --name 'October expenses' --policy-id YOUR_POLICY_ID \
+  --notes 'Health, Software License, Books, Courses & Internet'
 expensify report view --report-id 456
 ```
 
 Report creation checks the workspace policy and refuses settings known to submit a new report instantly. Other workspace submission schedules still apply. Use the returned report ID instead of `456`, and check that the report is still your draft.
+
+Set a report's Notes with `report edit --report-id 456 --notes 'Monthly reimbursements'`. Notes use the workspace's text report field named Notes. The CLI edits your own draft expense reports; `report create --notes` also requires `--policy-id`. Pass `--notes=''` to clear optional Notes; required fields reject blank text. `report view` always returns a `notes` string, including `""` for empty Notes.
 
 Add an expense and its receipt to that draft, then read it back:
 
@@ -116,7 +119,7 @@ Deletion, report submission, and report approval require confirmation. For an un
 | Resource | Commands |
 | --- | --- |
 | `expense` | `list`, `view`, `create`, `edit`, `move`, `delete`, `attach` |
-| `report` | `list`, `view`, `create`, `submit`, `approve`, `comment` |
+| `report` | `list`, `view`, `create`, `edit`, `submit`, `approve`, `comment` |
 | `workspace` | `list`, `view` |
 | `category` | `list` |
 | `tag` | `list` |
@@ -141,7 +144,7 @@ npx skills add magarcia/expensify-cli --skill expensify --agent codex --global
 
 See [skill installation](docs/installation.md#agent-skill) for other agents, project scope, and local checkouts. Remote installation requires the repository to be published on GitHub.
 
-Use `--output llm` for agents: it produces labeled records with field names and pagination metadata. Use `--output json` for scripts that consume JSON. `--output auto` produces terminal tables on a TTY and tab-separated output when piped. Command data goes to stdout; diagnostics and errors go to stderr.
+Use `--output llm` for agents: it produces labeled records with field names, plus pagination metadata for expense and report lists. Use `--output json` for scripts that consume JSON. `--output auto` produces terminal tables on a TTY and tab-separated output when piped. Command data goes to stdout; diagnostics and errors go to stderr.
 
 ```sh
 expensify expense list --limit 20 --no-input --output json

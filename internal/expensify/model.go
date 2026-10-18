@@ -27,16 +27,17 @@ type Expense struct {
 }
 
 type Report struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	PolicyID       string `json:"policy_id,omitempty"`
-	Type           string `json:"type,omitempty"`
-	Total          int64  `json:"total"`
-	Currency       string `json:"currency,omitempty"`
-	State          string `json:"state,omitempty"`
-	Status         string `json:"status,omitempty"`
-	OwnerAccountID string `json:"owner_account_id,omitempty"`
-	ManagerID      string `json:"manager_id,omitempty"`
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	Notes          *string `json:"notes,omitempty"`
+	PolicyID       string  `json:"policy_id,omitempty"`
+	Type           string  `json:"type,omitempty"`
+	Total          int64   `json:"total"`
+	Currency       string  `json:"currency,omitempty"`
+	State          string  `json:"state,omitempty"`
+	Status         string  `json:"status,omitempty"`
+	OwnerAccountID string  `json:"owner_account_id,omitempty"`
+	ManagerID      string  `json:"manager_id,omitempty"`
 }
 
 type Workspace struct {

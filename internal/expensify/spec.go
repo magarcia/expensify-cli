@@ -29,6 +29,7 @@ type Spec struct {
 func Specs() []Spec {
 	id := func(name, usage string) Flag { return Flag{Name: name, Usage: usage, Required: true} }
 	policy := Flag{Name: "policy-id", Usage: "Workspace policy ID"}
+	notes := Flag{Name: "notes", Usage: "Report Notes text (use --notes='' to clear optional Notes)"}
 	page := []Flag{{Name: "limit", Usage: "Maximum records (1–1000)", Default: "100"}, {Name: "offset", Usage: "Number of matching records to skip", Default: "0"}}
 	query := Flag{Name: "query", Usage: `Search filter JSON AST, for example '{"operator":"eq","left":"merchant","right":"Cafe"}'`}
 	listFilters := []Flag{query, policy, {Name: "status", Usage: "Expense or report status (for example drafts, outstanding, approved, paid)"}, {Name: "since", Usage: "Include expenses/reports dated on or after YYYY-MM-DD"}, {Name: "until", Usage: "Include expenses/reports dated on or before YYYY-MM-DD"}}
@@ -53,7 +54,8 @@ func Specs() []Spec {
 		{Name: "expense attach", Summary: "Attach a receipt to an expense", Example: "expensify expense attach --expense-id 123 --file receipt.jpg", Flags: []Flag{id("expense-id", "Expense transaction ID"), id("file", "Receipt file path")}, Mutates: true},
 		{Name: "report list", Summary: "List expense reports", Example: "expensify report list --status drafts --limit 20", Flags: append(append([]Flag(nil), listFilters...), page...)},
 		{Name: "report view", Summary: "View one report", Example: "expensify report view --report-id 456", Flags: []Flag{id("report-id", "Report ID")}},
-		{Name: "report create", Summary: "Create an expense report", Example: "expensify report create --name 'October expenses' --policy-id ABC", Flags: []Flag{id("name", "Report name"), policy, {Name: "owner-email", Usage: "Expense report owner email"}}, Mutates: true},
+		{Name: "report create", Summary: "Create an expense report", Example: "expensify report create --name 'October expenses' --policy-id ABC --notes 'Health, Software License, Books, Courses & Internet'", Flags: []Flag{id("name", "Report name"), policy, {Name: "owner-email", Usage: "Expense report owner email"}, notes}, Mutates: true},
+		{Name: "report edit", Summary: "Set or clear an expense report's Notes", Example: "expensify report edit --report-id 456 --notes 'Health, Software License, Books, Courses & Internet'", Flags: []Flag{id("report-id", "Report ID"), notes}, Mutates: true},
 		{Name: "report submit", Summary: "Submit an expense report", Example: "expensify report submit --report-id 456 --yes", Flags: []Flag{id("report-id", "Report ID"), {Name: "manager-email", Usage: "Approver email"}}, Mutates: true, Confirm: true},
 		{Name: "report approve", Summary: "Approve an expense report", Example: "expensify report approve --report-id 456 --yes", Flags: []Flag{id("report-id", "Report ID")}, Mutates: true, Confirm: true},
 		{Name: "report comment", Summary: "Add a plain-text comment to a report", Example: "expensify report comment --report-id 456 --text 'Ready for review'", Flags: []Flag{id("report-id", "Report ID"), id("text", "Comment text")}, Mutates: true},
@@ -155,6 +157,16 @@ func Validate(noun, verb string, values map[string]string) error {
 		}
 		if !changed {
 			return fault.Usage("Specify at least one expense field to change.")
+		}
+	}
+	if noun == "report" && verb == "edit" {
+		if _, present := values["notes"]; !present {
+			return fault.Usage("--notes is required; use --notes='' to clear the report's Notes.")
+		}
+	}
+	if noun == "report" && verb == "create" {
+		if _, present := values["notes"]; present && values["policy-id"] == "" {
+			return fault.Usage("--policy-id is required when creating a report with --notes.")
 		}
 	}
 	if query := values["query"]; query != "" {
