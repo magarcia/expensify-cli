@@ -220,7 +220,7 @@ func TestConcurrentSavesAreAtomic(t *testing.T) {
 				return
 			default:
 			}
-			data, err := os.ReadFile(store.Path())
+			data, err := readConcurrentSnapshot(store.Path())
 			// Windows can deny opening the file briefly while replacing it.
 			const sharingViolation syscall.Errno = 32
 			if runtime.GOOS == "windows" && errors.Is(err, sharingViolation) {
