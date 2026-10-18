@@ -2,9 +2,30 @@
 
 Release binaries cover macOS, Linux, and Windows on amd64 and arm64. They don't need Go or a separate language runtime. Browser login needs an installed supported Chrome-compatible browser; keyring storage needs the platform services described below.
 
+## Homebrew (recommended)
+
+On macOS or Linux, install with [Homebrew](https://brew.sh):
+
+```sh
+brew install magarcia/tap/expensify
+expensify --version
+expensify auth login
+```
+
+This command adds [Martin's tap](https://github.com/magarcia/homebrew-tap) automatically. It selects the published binary for Intel / AMD 64-bit or ARM 64-bit and verifies its SHA-256 checksum. Go isn't required. The formula installs Bash, Zsh, and Fish completions, documentation, and the agent skill.
+
+Upgrade through Homebrew:
+
+```sh
+brew update
+brew upgrade expensify
+```
+
+The tap checks for new stable releases hourly. If a new version isn't available yet, check the tap's latest **Update Expensify** run in GitHub Actions. Credentials and settings stay in your existing keyring and configuration directory when you upgrade.
+
 ## Choose an archive
 
-Open [GitHub Releases](https://github.com/magarcia/expensify-cli/releases) and choose a published version. If no releases exist yet, use [a source build](#build-from-source).
+For Windows or manual installation, open [GitHub Releases](https://github.com/magarcia/expensify-cli/releases) and choose a published version.
 
 | Your platform | Release archive |
 | --- | --- |
@@ -21,7 +42,7 @@ Use the named binary asset, not GitHub's automatic **Source code** archives. Eac
 
 ## macOS and Linux
 
-The example below selects macOS on Apple Silicon. Replace `version` with a published tag, and select `os` and `arch` from the table. `v0.1.0` is an example, not a promise that this version has been published.
+The example below selects macOS on Apple Silicon. Replace `version` with your chosen release tag, and select `os` and `arch` from the table.
 
 ```sh
 mkdir -p expensify-download
@@ -126,8 +147,6 @@ just build
 just install
 ```
 
-The clone command requires the repository to have been published. Before publication, run the build commands in the local checkout.
-
 `just install` installs to `GOBIN` when set, otherwise to the first `GOPATH` entry's `bin` directory. Inspect these values with `go env GOBIN GOPATH`, and add the chosen directory to `PATH`. On Windows, use `bin\expensify.exe` to run the local build. `just` recipes use Bash; Windows contributors need a Bash installation such as Git for Windows.
 
 For a public module, the shorter Go-only installation also works:
@@ -176,6 +195,8 @@ The skill uses the installed CLI's help as its command reference. For agent comm
 
 ## Shell completions
 
+Homebrew installs Bash, Zsh, and Fish completions into its standard directories. Enable your shell's [Homebrew completion support](https://docs.brew.sh/Shell-Completion) to load them.
+
 Each release archive contains generated scripts in `completions/`. You can also generate them from the installed binary:
 
 ```sh
@@ -204,6 +225,8 @@ Add `. "$PSScriptRoot/expensify-completion.ps1"` to `$PROFILE`, creating the pro
 
 ## Upgrade or uninstall
 
-To upgrade, download and verify a newer release, then replace the executable in the same location. Credentials and settings stay in your existing OS keyring and configuration directory.
+For Homebrew installations, run `brew update` and `brew upgrade expensify`. For a manual installation, download and verify a newer release, then replace the executable in the same location. Credentials and settings stay in your existing OS keyring and configuration directory.
 
 To remove saved credentials, run `expensify auth logout` before deleting the binary. Then remove the installed executable, completion scripts, and any `PATH` entries you added. Logout clears local credentials; it doesn't revoke the device session at Expensify. Remove the configuration directory separately if you also want to discard nonsecret settings.
+
+If you installed with Homebrew, use `brew uninstall expensify` to remove the binary, completions, and bundled documentation. Homebrew doesn't remove your saved credentials or settings.

@@ -83,6 +83,22 @@ The workflow publishes stable tags as normal releases and prerelease tags as pre
 
 A separate job downloads all published assets and verifies their contents, checksums, and public provenance attestations. It runs the packaged Linux binary to check its version, help, and a dry-run command with `--output llm`.
 
+## Homebrew
+
+The formula lives in [`magarcia/homebrew-tap`](https://github.com/magarcia/homebrew-tap/blob/main/Formula/expensify.rb). Its **Update Expensify** workflow checks the latest stable GitHub release hourly and can be started manually from the tap's **Actions** tab. Prereleases don't update the formula.
+
+The updater selects the four macOS and Linux archives, checks their release metadata and SHA-256 digests, and tests the proposed formula before committing it. The tap uses its own `GITHUB_TOKEN`; no token with write access to both repositories is needed.
+
+After a release, confirm the tap's updater and installation checks pass, then verify:
+
+```sh
+brew update
+brew upgrade expensify
+expensify --version
+```
+
+The local tap checkout is `~/dev/homebrew-tap`. To update it manually, run `./scripts/update-expensify` there, review the formula diff, and follow the tap's development checks before committing.
+
 ## Release contents
 
 | Platform | Architectures | Format |

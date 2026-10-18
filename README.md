@@ -6,6 +6,16 @@ This is an unofficial client for the New Expensify app API. It's independent of 
 
 ## Install
 
+On macOS or Linux, install with [Homebrew](https://brew.sh):
+
+```sh
+brew install magarcia/tap/expensify
+```
+
+Homebrew selects the binary for your OS and architecture and installs shell completions. Upgrade with `brew update` followed by `brew upgrade expensify`. No Go installation is needed.
+
+### Other installation methods
+
 Download the archive for your platform from [GitHub Releases](https://github.com/magarcia/expensify-cli/releases), verify its SHA-256 checksum, and put `expensify` (`expensify.exe` on Windows) on your `PATH`. Release binaries need no Go installation.
 
 | Platform | Intel / AMD 64-bit | ARM 64-bit |
@@ -14,7 +24,7 @@ Download the archive for your platform from [GitHub Releases](https://github.com
 | Linux | `linux_amd64.tar.gz` | `linux_arm64.tar.gz` |
 | Windows | `windows_amd64.zip` | `windows_arm64.zip` |
 
-Asset names start with `expensify_vX.Y.Z_`. Apple Silicon uses `arm64`; `x86_64` uses `amd64`. See [installation](docs/installation.md) for download commands, checksum verification, shell completions, and source builds. If Releases is empty, build from source until the first release is published.
+Asset names start with `expensify_vX.Y.Z_`. Apple Silicon uses `arm64`; `x86_64` uses `amd64`. See [installation](docs/installation.md) for download commands, checksum verification, shell completions, and source builds.
 
 With Go 1.26 or newer, you can also install the public module:
 
@@ -22,7 +32,7 @@ With Go 1.26 or newer, you can also install the public module:
 go install github.com/magarcia/expensify-cli/cmd/expensify@latest
 ```
 
-This command becomes available once the repository is public. It installs to `GOBIN`, or the first `GOPATH` entry's `bin` directory.
+This installs to `GOBIN`, or the first `GOPATH` entry's `bin` directory.
 
 ## Log in
 
