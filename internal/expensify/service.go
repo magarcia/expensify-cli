@@ -360,15 +360,15 @@ func (s *Service) createReport(ctx context.Context, values map[string]string) (M
 		return Mutation{}, err
 	}
 	if hasNotes {
-		if _, err := s.setReportNotes(ctx, ids[0], values["notes"]); err != nil {
-			message := fmt.Sprintf("Report %s was created, but its Notes could not be saved.", ids[0])
+		if _, err := s.setReportNotes(ctx, ids[0], values["notes"]); err != nil && !s.reportNotesSaved(ctx, ids[0], values["notes"]) {
+			message := fmt.Sprintf("Report %s was created, but its Notes could not be confirmed.", ids[0])
 			exit := 1
 			var failure *fault.Error
 			if errors.As(err, &failure) {
 				message += " " + failure.Message
 				exit = failure.Exit
 			}
-			return Mutation{}, fault.New("API-006", message, fmt.Sprintf("Do not create another report. Inspect expensify report view --report-id %s, then retry expensify report edit --report-id %s --notes '<text>'.", ids[0], ids[0]), exit)
+			return Mutation{}, fault.New("API-006", message, fmt.Sprintf("Do not create another report. Inspect expensify report view --report-id %s. If Notes are missing or incorrect, retry expensify report edit --report-id %s --notes '<text>'.", ids[0], ids[0]), exit)
 		}
 	}
 	return Mutation{ID: ids[0], Action: "created"}, nil

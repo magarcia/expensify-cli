@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/magarcia/expensify-cli/internal/fault"
 )
@@ -171,6 +172,35 @@ func (s *Service) setReportNotes(ctx context.Context, reportID, notes string) (M
 		return Mutation{}, err
 	}
 	return Mutation{ID: reportID, Action: "updated"}, nil
+}
+
+func (s *Service) reportNotesSaved(ctx context.Context, reportID, notes string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for attempt := 0; attempt < 2; attempt++ {
+		if ctx.Err() != nil {
+			return false
+		}
+		state, err := s.openReport(ctx, reportID)
+		if err == nil {
+			// Defaults don't prove persistence; check only the report's attached value.
+			field, fieldErr := findNotesField(nil, object(state["report_"+reportID]))
+			value, explicit := field["value"].(string)
+			if fieldErr == nil && explicit && value == notes {
+				return true
+			}
+		}
+		if attempt == 0 {
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return false
+			case <-timer.C:
+			}
+		}
+	}
+	return false
 }
 
 func reportNotesPolicyLoaded(state snapshot, policyID string) bool {

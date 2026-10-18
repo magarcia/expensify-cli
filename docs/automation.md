@@ -68,7 +68,9 @@ expensify report create --policy-id YOUR_POLICY_ID --name 'October expenses' \
 
 Before creating a workspace report, the CLI reads its policy and refuses the known instant-submit combination: `autoReporting=true`, `autoReportingFrequency=instant`, and an `approvalMode` other than `optional`. The report-creation API has no option to defer that immediate submission. Other workspace submission schedules still apply.
 
-`--notes` sets the workspace's text report field named Notes. `report create --notes` requires `--policy-id`; the CLI checks that the workspace has one unambiguous text Notes field before creating the report. Creating the report and saving its Notes require separate requests. If the Notes request fails after creation, the error identifies the created report. Inspect it and retry `report edit` with that ID instead of creating another report.
+`--notes` sets the workspace's text report field named Notes. `report create --notes` requires `--policy-id`; the CLI checks that the workspace has one unambiguous text Notes field before creating the report. Creating the report and saving its Notes require separate requests.
+
+If the Notes step returns an error after creation, the CLI reads the new report up to twice, waiting 250 ms before the second read, within a three-second verification budget. It returns success when the report's attached Notes value exactly matches the requested text. Workspace defaults don't count as confirmation. Neither write is replayed. If the value can't be confirmed, `API-006` preserves the original error reason and identifies the created report. Inspect it and use `report edit` with that ID if Notes are missing or incorrect. Don't create another report.
 
 Update an existing report's Notes with `report edit`. Preview the change first:
 

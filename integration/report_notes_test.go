@@ -10,12 +10,22 @@ import (
 )
 
 type reportNotesAPI struct {
-	t            *testing.T
-	reports      map[string]map[string]any
-	createdID    string
-	writes       []string
-	missingField bool
-	rejectNotes  bool
+	t                   *testing.T
+	reports             map[string]map[string]any
+	createdID           string
+	writes              []string
+	missingField        bool
+	rejectNotes         bool
+	notesError          int
+	storedNotes         *string
+	defaultOnly         bool
+	readbackError       int
+	notesAttempted      bool
+	readbacks           int
+	readbackFailures    int
+	createdNotes        *string
+	initialReportError  int
+	initialReadRejected bool
 }
 
 func reportNotesMetadata(value string) map[string]any {
@@ -59,6 +69,18 @@ func (f *reportNotesAPI) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			patch("policy_ABC", map[string]any{"id": "ABC", "role": "user", "autoReporting": false, "fieldList": fields}),
 		)
 	case "/OpenReport":
+		if f.notesAttempted || f.initialReadRejected {
+			f.readbacks++
+		}
+		if !f.notesAttempted && !f.initialReadRejected && f.initialReportError != 0 {
+			f.initialReadRejected = true
+			respond(w, map[string]any{"jsonCode": f.initialReportError})
+			return
+		}
+		if (f.notesAttempted || f.initialReadRejected) && f.readbackError != 0 && (f.readbackFailures == 0 || f.readbacks <= f.readbackFailures) {
+			respond(w, map[string]any{"jsonCode": f.readbackError})
+			return
+		}
 		id := r.Form.Get("reportID")
 		if f.reports[id] == nil {
 			f.t.Fatalf("read unknown fixture report %q", id)
@@ -86,9 +108,13 @@ func (f *reportNotesAPI) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			"policyID": "ABC", "ownerAccountID": "10", "stateNum": "0", "statusNum": "0",
 			"currency": "EUR", "total": 0,
 		}
+		if f.createdNotes != nil {
+			f.reports[f.createdID]["fieldList"] = map[string]any{"expensify_text_notes": reportNotesMetadata(*f.createdNotes)}
+		}
 		respond(w, map[string]any{"jsonCode": 200})
 	case "/SetReportField":
 		f.writes = append(f.writes, r.URL.Path)
+		f.notesAttempted = true
 		fields := jsonObject(f.t, r.Form.Get("reportFields"))
 		actions := jsonObject(f.t, r.Form.Get("reportFieldsActionIDs"))
 		field, ok := fields["expensify_text_notes"].(map[string]any)
@@ -113,6 +139,18 @@ func (f *reportNotesAPI) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		report := f.reports[r.Form.Get("reportID")]
 		if report == nil || report["ownerAccountID"] != "10" || report["stateNum"] != "0" || report["statusNum"] != "0" {
 			f.t.Fatal("Notes workflow attempted to modify an unowned or submitted report")
+		}
+		if f.storedNotes != nil {
+			stored := reportNotesMetadata(*f.storedNotes)
+			if f.defaultOnly {
+				delete(stored, "value")
+				stored["defaultValue"] = *f.storedNotes
+			}
+			report["fieldList"] = map[string]any{"expensify_text_notes": stored}
+		}
+		if f.notesError != 0 {
+			respond(w, map[string]any{"jsonCode": f.notesError})
+			return
 		}
 		if f.rejectNotes {
 			respond(w, map[string]any{"jsonCode": 666})
@@ -184,6 +222,75 @@ func TestReportNotesPartialCreateFailureRecoversWithoutDuplicate(t *testing.T) {
 		t.Fatalf("partial failure recovery duplicated the report or lost Notes: %#v", view)
 	}
 }
+
+func TestReportNotesCreateAcceptsPersistedNotesAfterWriteError(t *testing.T) {
+	const notes = "Software and Internet"
+	for _, name := range []string{"persisted before rejection", "delayed read visibility", "initial follow-up read rejected"} {
+		t.Run(name, func(t *testing.T) {
+			fixture, s := newReportNotesAPI(t)
+			wantWrites, wantReadbacks := "/CreateAppReport,/SetReportField", 1
+			if name == "initial follow-up read rejected" {
+				fixture.createdNotes, fixture.initialReportError = stringPointer(notes), 404
+				wantWrites = "/CreateAppReport"
+			} else {
+				fixture.notesError, fixture.storedNotes = 404, stringPointer(notes)
+				if name == "delayed read visibility" {
+					fixture.readbackError, fixture.readbackFailures = 404, 1
+					wantReadbacks = 2
+				}
+			}
+			created := runNotesCommand(t, s, "report", "create", "--policy-id", "ABC", "--name", "Disposable Notes fixture", "--notes", notes)
+			if fixture.createdID == "" || created["id"] != fixture.createdID || created["action"] != "created" {
+				t.Fatalf("readback recovery lost the original report ID or create action: %#v", created)
+			}
+			if fixture.readbacks != wantReadbacks {
+				t.Fatalf("Notes recovery used %d report reads; want %d", fixture.readbacks, wantReadbacks)
+			}
+			if got := strings.Join(fixture.writes, ","); got != wantWrites || len(fixture.reports) != 1 {
+				t.Fatalf("readback recovery duplicated a report or retried the Notes write: writes=%s reports=%d", got, len(fixture.reports))
+			}
+		})
+	}
+}
+
+func TestReportNotesCreateReadBackDoesNotHidePartialFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		storedNotes   *string
+		defaultOnly   bool
+		writeError    int
+		readbackError int
+	}{
+		{name: "mismatching attached Notes", storedNotes: stringPointer("Different Notes"), writeError: 404},
+		{name: "matching default without explicit value", storedNotes: stringPointer("Software and Internet"), defaultOnly: true, writeError: 404},
+		{name: "readback failure preserves original error", writeError: 666, readbackError: 404},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, s := newReportNotesAPI(t)
+			fixture.notesError, fixture.storedNotes = tc.writeError, tc.storedNotes
+			fixture.defaultOnly, fixture.readbackError = tc.defaultOnly, tc.readbackError
+			got := s.runInProcess("", "report", "create", "--policy-id", "ABC", "--name", "Disposable Notes fixture", "--notes", "Software and Internet", "--no-input", "--output", "json")
+			if got.code == 0 || got.stdout != "" || fixture.createdID == "" {
+				t.Fatalf("unconfirmed Notes were reported as success or lost the created report: %+v", got)
+			}
+			failure := jsonObject(t, got.stderr)["error"].(map[string]any)
+			if failure["code"] != "API-006" || !strings.Contains(failure["message"].(string), fixture.createdID) {
+				t.Fatalf("partial failure lost its code or created report ID: %#v", failure)
+			}
+			if tc.writeError == 666 && !strings.Contains(failure["message"].(string), "jsonCode 666") {
+				t.Fatalf("readback error replaced the original Notes write error: %#v", failure)
+			}
+			if fixture.readbacks == 0 || fixture.readbacks > 2 {
+				t.Fatalf("partial Notes failure used %d report reads; want one or two", fixture.readbacks)
+			}
+			if got := strings.Join(fixture.writes, ","); got != "/CreateAppReport,/SetReportField" || len(fixture.reports) != 1 {
+				t.Fatalf("unconfirmed Notes caused duplicate writes: writes=%s reports=%d", got, len(fixture.reports))
+			}
+		})
+	}
+}
+
+func stringPointer(value string) *string { return &value }
 
 func TestReportNotesMissingFieldPreventsCreate(t *testing.T) {
 	fixture, s := newReportNotesAPI(t)
