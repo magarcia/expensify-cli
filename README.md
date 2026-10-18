@@ -51,7 +51,7 @@ Choose a browser with `expensify auth login --browser chrome`, or use `--manual`
 
 ## Everyday commands
 
-Track a personal expense. Amounts use integer currency minor units: `1250` means `12.50 USD`.
+With no default workspace configured, track a personal expense. Amounts use integer currency minor units: `1250` means `12.50 USD`.
 
 ```sh
 expensify expense create \
@@ -60,7 +60,9 @@ expensify expense create \
   --comment 'Coffee with the team'
 ```
 
-Omit `--date` to use today's local date. Currency defaults to your configured currency, initially `USD`. Expense creation tracks a personal expense; it doesn't assign it to an existing report.
+Omit `--date` to use today's local date. Currency defaults to your configured currency, initially `USD`.
+
+Use `expense create --policy-id YOUR_POLICY_ID` to create an expense through your workspace's policy chat and a draft report. Use `--report-id REPORT_ID` to choose your own existing draft; the CLI infers its workspace. If you pass both IDs, they must identify the same workspace. With neither flag, a configured `policy-id` default selects the workspace; without that default, creation stays personal.
 
 Filter expenses, view details, and attach a receipt:
 
@@ -73,17 +75,37 @@ expensify expense attach --expense-id 123 --file receipt.jpg
 
 Receipts must be JPEG, PNG, or PDF files up to 32 MiB, with matching extensions. Edits change only the fields you supply. Pass an empty `--comment`, `--category`, or `--tag` to clear that field, for example `--comment=''`.
 
-Create and inspect reports:
+Find or create a monthly draft:
 
 ```sh
+expensify report list --policy-id YOUR_POLICY_ID --status drafts
+
+# Create this report only if you don't already have the draft you need.
 expensify report create --name 'October expenses' --policy-id YOUR_POLICY_ID
-expensify report list --status drafts --since 2026-10-01 --until 2026-10-31
 expensify report view --report-id 456
 ```
 
+Report creation checks the workspace policy and refuses settings known to submit a new report instantly. Other workspace submission schedules still apply. Use the returned report ID instead of `456`, and check that the report is still your draft.
+
+Add an expense and its receipt to that draft, then read it back:
+
+```sh
+expensify expense create --report-id 456 \
+  --amount 1250 --currency USD --merchant Cafe --date 2026-10-17 \
+  --receipt receipt.jpg --category Meals --tag Project
+expensify expense list --report-id 456
+expensify report view --report-id 456
+```
+
+Choose category and tag names from `category list --policy-id YOUR_POLICY_ID` and `tag list --policy-id YOUR_POLICY_ID`. `--receipt` sends a JPEG, PNG, or PDF file up to 32 MiB with the initial create request; you don't need a separate attach command.
+
+Move an existing expense with `expense move --expense-id 123 --report-id 456`. The destination must be your own draft. The source must be your own unreported expense or an expense in your own draft in the same workspace. The CLI rejects submitted reports, another owner's reports, and workspace mismatches.
+
+The CLI asks Expensify to defer immediate submission when creating a workspace expense. Your workspace's scheduled submission rules still apply. See the [monthly draft workflow](docs/automation.md#monthly-draft-workflow) for explicit checks and unattended commands. These steps don't submit the report.
+
 Date boundaries are inclusive. Expense and report lists accept `drafts`, `outstanding`, `approved`, `done`, or `paid`; expenses also accept `unreported` and `deleted`.
 
-Preview any resource mutation with `--dry-run`. It validates the input without authenticating or calling Expensify:
+Preview any resource mutation with `--dry-run`. It validates local input without authenticating or calling Expensify, so it can't verify report state, ownership, permissions, or server behavior:
 
 ```sh
 expensify report submit --report-id 456 --dry-run
@@ -93,7 +115,7 @@ Deletion, report submission, and report approval require confirmation. For an un
 
 | Resource | Commands |
 | --- | --- |
-| `expense` | `list`, `view`, `create`, `edit`, `delete`, `attach` |
+| `expense` | `list`, `view`, `create`, `edit`, `move`, `delete`, `attach` |
 | `report` | `list`, `view`, `create`, `submit`, `approve`, `comment` |
 | `workspace` | `list`, `view` |
 | `category` | `list` |

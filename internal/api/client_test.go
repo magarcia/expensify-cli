@@ -231,6 +231,7 @@ func TestResponseFailuresAreRedactedAndNotRetried(t *testing.T) {
 		{"trailing", 200, `{"jsonCode":200} SECRET`, "API-002"},
 		{"missing code", 200, `{"message":"SECRET"}`, "API-002"},
 		{"bad code", 200, `{"jsonCode":200.2,"message":"SECRET"}`, "API-002"},
+		{"secret code", 200, `{"jsonCode":"SECRET","message":"SECRET"}`, "API-002"},
 		{"server", 503, `SECRET`, "API-HTTP"},
 		{"unauthorized", 401, `SECRET`, "AUTH-002"},
 		{"forbidden", 403, `SECRET`, "AUTH-003"},
@@ -258,6 +259,31 @@ func TestResponseFailuresAreRedactedAndNotRetried(t *testing.T) {
 				t.Errorf("ambiguous write sent %d requests", calls)
 			}
 		})
+	}
+}
+
+func TestAPIRejectionIncludesOnlyNumericCode(t *testing.T) {
+	t.Parallel()
+	client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"jsonCode":666,"message":"authToken=backend-secret partnerUserSecret=backend-secret","authToken":"backend-secret"}`)
+	}, config.Credentials{AuthToken: "session-secret"}, nil)
+	_, err := client.Call(context.Background(), "OpenPolicyTagsPage", url.Values{"policyID": {"workspace-private"}})
+	errorCode(t, err, "API-001")
+	failure := err.(*fault.Error)
+	if !strings.Contains(failure.Message, "jsonCode 666") {
+		t.Errorf("backend code is missing: %v", err)
+	}
+	if failure.Exit != 1 || failure.Hint != "Check the command inputs and account permissions, then try again." {
+		t.Errorf("rejection contract changed: %#v", failure)
+	}
+	encoded, marshalErr := json.Marshal(failure)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	for _, secret := range []string{"backend-secret", "session-secret", "workspace-private", "authToken", "partnerUserSecret"} {
+		if strings.Contains(string(encoded), secret) || strings.Contains(err.Error(), secret) {
+			t.Errorf("rejection exposed response or request details: %s", secret)
+		}
 	}
 }
 

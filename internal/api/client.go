@@ -396,6 +396,6 @@ func apiError(code int) error {
 	case 429:
 		return fault.New("API-429", "Expensify is rate limiting requests.", "Wait before trying again.", 10)
 	default:
-		return fault.New("API-001", "Expensify rejected the request.", "Check the command inputs and account permissions, then try again.", 1)
+		return fault.New("API-001", "Expensify rejected the request (jsonCode "+strconv.Itoa(code)+").", "Check the command inputs and account permissions, then try again.", 1)
 	}
 }

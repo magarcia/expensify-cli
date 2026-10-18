@@ -62,8 +62,9 @@ type Page[T any] struct {
 }
 
 type Mutation struct {
-	ID     string `json:"id"`
-	Action string `json:"action"`
+	ID       string `json:"id"`
+	Action   string `json:"action"`
+	ReportID string `json:"report_id,omitempty"`
 }
 
 type snapshot map[string]any
@@ -91,32 +92,58 @@ func decodeSnapshot(response map[string]any) (snapshot, error) {
 		key, keyOK := patch["key"].(string)
 		method, methodOK := patch["onyxMethod"].(string)
 		value, valueOK := patch["value"]
-		if !keyOK || key == "" || !methodOK || !valueOK {
+		if !methodOK || method == "" {
 			return nil, unexpected("Onyx update is missing its key, method, or value")
 		}
-		switch strings.ToLower(method) {
+		method = strings.ToLower(method)
+		if method != "clear" && method != "multiset" && (!keyOK || key == "" || !valueOK) {
+			return nil, unexpected("Onyx update is missing its key, method, or value")
+		}
+		switch method {
 		case "set":
-			if value == nil {
-				delete(state, key)
-			} else {
-				state[key] = value
-			}
+			setSnapshotValue(state, key, value)
 		case "merge":
-			state[key] = merge(state[key], value)
-			if state[key] == nil {
-				delete(state, key)
+			setSnapshotValue(state, key, merge(state[key], value))
+		case "mergecollection", "setcollection":
+			collection := onyxObject(value)
+			if collection == nil {
+				return nil, unexpected("Onyx collection value is not an object")
 			}
-		case "mergecollection":
-			collection, ok := value.(map[string]any)
-			if !ok {
-				return nil, unexpected("Onyx mergeCollection value is not an object")
+			if !strings.HasSuffix(key, "_") {
+				return nil, unexpected("Onyx collection key is invalid")
 			}
-			for k, v := range collection {
-				state[k] = merge(state[k], v)
-				if state[k] == nil {
-					delete(state, k)
+			for member := range collection {
+				if !strings.HasPrefix(member, key) || member == key {
+					return nil, unexpected("Onyx collection member does not match its key")
 				}
 			}
+			if method == "setcollection" {
+				for member := range state {
+					if strings.HasPrefix(member, key) {
+						delete(state, member)
+					}
+				}
+			}
+			for k, v := range collection {
+				if method == "mergecollection" {
+					v = merge(state[k], v)
+				}
+				setSnapshotValue(state, k, v)
+			}
+		case "multiset":
+			values := object(value)
+			if values == nil {
+				return nil, unexpected("Onyx multiSet value is not an object")
+			}
+			for key, value := range values {
+				if key == "" {
+					return nil, unexpected("Onyx multiSet member has no key")
+				}
+				setSnapshotValue(state, key, value)
+			}
+		case "clear":
+			// Onyx clears persisted data before queued writes. Each response here
+			// starts with empty state, so its writes already have that behavior.
 		default:
 			return nil, unexpected("unsupported Onyx update method")
 		}
@@ -125,13 +152,33 @@ func decodeSnapshot(response map[string]any) (snapshot, error) {
 		if !strings.HasPrefix(key, "snapshot_") {
 			continue
 		}
-		if data, ok := object(value)["data"].(map[string]any); ok {
+		if data := onyxObject(object(value)["data"]); data != nil {
+			object(value)["data"] = data
 			for k, v := range data {
 				state[k] = v
 			}
 		}
 	}
 	return state, nil
+}
+
+func setSnapshotValue(state snapshot, key string, value any) {
+	if value == nil {
+		delete(state, key)
+	} else {
+		state[key] = value
+	}
+}
+
+func onyxObject(value any) map[string]any {
+	if result := object(value); result != nil {
+		return result
+	}
+	// PHP can encode an empty object as []; populated arrays are not objects.
+	if values, ok := value.([]any); ok && len(values) == 0 {
+		return map[string]any{}
+	}
+	return nil
 }
 
 func merge(current, patch any) any {

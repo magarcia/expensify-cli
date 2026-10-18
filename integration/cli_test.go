@@ -190,6 +190,7 @@ func snapshot(r *http.Request) map[string]any {
 			map[string]any{"onyxMethod": "set", "key": "transactions_101", "value": map[string]any{"transactionID": "101", "reportID": "201", "amount": -1234, "currency": "EUR", "merchant": "Cafe", "created": "2026-10-17"}},
 			map[string]any{"onyxMethod": "set", "key": "report_201", "value": map[string]any{"reportID": "201", "reportName": "October", "type": "expense", "total": 1234, "currency": "EUR"}},
 			map[string]any{"onyxMethod": "set", "key": "selfDMReportID", "value": "301"},
+			map[string]any{"onyxMethod": "set", "key": "policy_ABC", "value": map[string]any{"id": "ABC", "name": "Team", "autoReporting": false}},
 			map[string]any{"onyxMethod": "set", "key": "reportActions_201", "value": map[string]any{"401": map[string]any{"reportActionID": "401", "originalMessage": map[string]any{"IOUTransactionID": "101"}}}},
 		},
 	}
@@ -421,6 +422,199 @@ func TestResourceCommandsPreserveInputs(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(commands, ","), "/Authenticate") {
 		t.Error("valid environment session was unnecessarily authenticated")
+	}
+}
+
+func TestDraftWorkspaceExpenseWorkflow(t *testing.T) {
+	const policyID = "ABC"
+	const reportName = "Test Person 2026-10"
+	const category = "Software License Expense"
+	const tag = "Engineering:Software Stipend"
+	const receiptData = "%PDF-1.7\nfixture invoice\n"
+	reports := map[string]any{
+		"report_100": map[string]any{"reportID": "100", "type": "chat", "chatType": "policyExpenseChat", "policyID": policyID, "ownerAccountID": 42},
+		"report_301": map[string]any{"reportID": "301", "type": "chat", "chatType": "selfDM", "ownerAccountID": 42},
+	}
+	transactions := map[string]any{}
+	actions := map[string]map[string]any{"100": {}, "301": {}}
+	var reportID, previewActionID string
+	var writes []string
+	apiURL := mockAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatalf("parse create receipt: %v", err)
+			}
+			defer r.MultipartForm.RemoveAll()
+		} else if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse workflow request: %v", err)
+		}
+		if r.Form.Get("authToken") != "session-token" {
+			t.Fatal("workflow omitted authentication")
+		}
+		onyxResponse := func(patches ...any) {
+			respond(w, map[string]any{"jsonCode": 200, "onyxData": patches})
+		}
+		switch r.URL.Path {
+		case "/OpenApp":
+			unreported := map[string]any{}
+			for key, value := range transactions {
+				if value.(map[string]any)["reportID"] == "0" {
+					unreported[key] = value
+				}
+			}
+			onyxResponse(
+				map[string]any{"onyxMethod": "multiSet", "value": map[string]any{"session": map[string]any{"accountID": 42, "email": "person@example.test"}, "selfDMReportID": "301"}},
+				map[string]any{"onyxMethod": "setCollection", "key": "policy_", "value": map[string]any{"policy_ABC": map[string]any{"id": policyID, "name": "Team", "autoReporting": false}}},
+				map[string]any{"onyxMethod": "setCollection", "key": "report_", "value": reports},
+				map[string]any{"onyxMethod": "setCollection", "key": "transactions_", "value": unreported},
+			)
+		case "/OpenReport":
+			id := r.Form.Get("reportID")
+			if reports["report_"+id] == nil {
+				t.Fatalf("read unknown report %q", id)
+			}
+			onyxResponse(
+				map[string]any{"onyxMethod": "set", "key": "report_" + id, "value": reports["report_"+id]},
+				map[string]any{"onyxMethod": "set", "key": "reportActions_" + id, "value": actions[id]},
+			)
+		case "/Search":
+			query := jsonObject(t, r.Form.Get("jsonQuery"))
+			data := map[string]any{}
+			var results any = data
+			count := len(transactions)
+			if query["type"] == "expense-report" {
+				filter, ok := query["filters"].(map[string]any)
+				if !ok || filter["left"] != "status" || filter["right"] != "drafts" || filter["operator"] != "eq" {
+					t.Fatalf("report status filter changed: %#v", query["filters"])
+				}
+				if reportID != "" {
+					t.Fatal("empty draft search ran after report creation")
+				}
+				results, count = []any{}, 0
+			} else if query["type"] == "expense" {
+				for key, value := range transactions {
+					data[key] = value
+				}
+				for key, value := range reports {
+					data[key] = value
+				}
+			} else {
+				t.Fatalf("unexpected search type: %#v", query["type"])
+			}
+			onyxResponse(map[string]any{"onyxMethod": "set", "key": "snapshot_" + r.Form.Get("hash"), "value": map[string]any{"data": results, "search": map[string]any{"hasMoreResults": false, "offset": query["offset"], "count": count}}})
+		case "/CreateAppReport":
+			writes = append(writes, r.URL.Path)
+			if r.Form.Get("policyID") != policyID || r.Form.Get("reportName") != reportName || r.Form.Get("type") != "expense" {
+				t.Fatal("report create lost workspace, name, or type")
+			}
+			reportID, previewActionID = r.Form.Get("reportID"), r.Form.Get("reportPreviewReportActionID")
+			if reportID == "" || previewActionID == "" || r.Form.Get("reportActionID") == "" {
+				t.Fatal("report create omitted generated IDs")
+			}
+			reports["report_"+reportID] = map[string]any{"reportID": reportID, "reportName": reportName, "type": "expense", "policyID": policyID, "chatReportID": "100", "ownerAccountID": 42, "stateNum": 0, "statusNum": 0, "currency": "EUR", "total": 0}
+			reports["report_100"].(map[string]any)["iouReportID"] = reportID
+			actions["100"][previewActionID] = map[string]any{"reportActionID": previewActionID, "actionName": "REPORTPREVIEW", "originalMessage": map[string]any{"linkedReportID": reportID}}
+			respond(w, map[string]any{"jsonCode": 200})
+		case "/RequestMoney":
+			writes = append(writes, r.URL.Path)
+			for key, want := range map[string]string{"amount": "1250", "currency": "EUR", "merchant": "Software", "created": "2026-10-18", "chatReportID": "100", "iouReportID": reportID, "reportPreviewReportActionID": previewActionID, "category": category, "tag": tag, "reimbursable": "true", "billable": "false", "shouldDeferAutoSubmit": "true", "receiptState": "SCANREADY"} {
+				if r.Form.Get(key) != want {
+					t.Errorf("create %s=%q, want %q", key, r.Form.Get(key), want)
+				}
+			}
+			file, header, err := r.FormFile("receipt")
+			if err != nil {
+				t.Fatalf("receipt missing from expense create: %v", err)
+			}
+			defer file.Close()
+			contents, err := io.ReadAll(file)
+			if err != nil || string(contents) != receiptData || header.Filename != "invoice.pdf" {
+				t.Fatalf("receipt changed: %q, %v", contents, err)
+			}
+			var attendees []map[string]string
+			if err := json.Unmarshal([]byte(r.Form.Get("attendees")), &attendees); err != nil || len(attendees) != 1 || attendees[0]["email"] != "person@example.test" {
+				t.Fatalf("expense attendees omitted authenticated user: %q", r.Form.Get("attendees"))
+			}
+			id := r.Form.Get("transactionID")
+			if id == "" || r.Form.Get("reportActionID") == "" || r.Form.Get("transactionThreadReportID") == "" {
+				t.Fatal("expense create omitted generated IDs")
+			}
+			transactions["transactions_"+id] = map[string]any{"transactionID": id, "reportID": reportID, "amount": -1250, "modifiedAmount": "", "currency": "EUR", "merchant": "Software", "created": "2026-10-18", "category": category, "tag": tag, "reimbursable": true, "billable": false, "receipt": map[string]any{"state": "SCANREADY"}}
+			respond(w, map[string]any{"jsonCode": 200})
+		case "/TrackExpense":
+			writes = append(writes, r.URL.Path)
+			if r.Form.Get("amount") != "500" || r.Form.Get("chatReportID") != "301" {
+				t.Fatal("personal expense did not use self DM and positive minor units")
+			}
+			id := r.Form.Get("transactionID")
+			transactions["transactions_"+id] = map[string]any{"transactionID": id, "reportID": "0", "amount": -500, "currency": "EUR", "merchant": "Unreported software", "created": "2026-10-18"}
+			actions["301"][r.Form.Get("reportActionID")] = map[string]any{"actorAccountID": 42, "originalMessage": map[string]any{"IOUTransactionID": id}}
+			respond(w, map[string]any{"jsonCode": 200})
+		case "/ChangeTransactionsReport":
+			writes = append(writes, r.URL.Path)
+			id := r.Form.Get("transactionList")
+			transaction, ok := transactions["transactions_"+id].(map[string]any)
+			if !ok || transaction["reportID"] != "0" || r.Form.Get("reportID") != reportID || strings.HasPrefix(id, "[") {
+				t.Fatalf("move did not use the unreported expense ID as CSV: %q", id)
+			}
+			mapping := jsonObject(t, r.Form.Get("transactionIDToReportActionAndThreadData"))
+			action, ok := mapping[id].(map[string]any)
+			if len(mapping) != 1 || !ok || action["moneyRequestPreviewReportActionID"] == "" || action["moneyRequestPreviewReportActionID"] == nil {
+				t.Fatalf("move omitted preview action mapping: %#v", mapping)
+			}
+			transaction["reportID"] = reportID
+			respond(w, map[string]any{"jsonCode": 200})
+		default:
+			t.Fatalf("unexpected workflow command: %s", r.URL.Path)
+		}
+	})
+	s := newSandbox(t, apiURL, map[string]string{"EXPENSIFY_AUTH_TOKEN": "session-token"})
+	run := func(args ...string) map[string]any {
+		t.Helper()
+		got := s.runInProcess("", append(args, "--no-input", "--output", "json")...)
+		requireSuccess(t, got)
+		return jsonObject(t, got.stdout)
+	}
+	page := run("report", "list", "--status", "drafts", "--limit", "3")
+	if items, ok := page["items"].([]any); !ok || len(items) != 0 || page["has_more"] != false {
+		t.Fatalf("empty draft search failed: %#v", page)
+	}
+	createdReport := run("report", "create", "--policy-id", policyID, "--name", reportName)
+	if createdReport["id"] != reportID || createdReport["action"] != "created" {
+		t.Fatalf("report create returned wrong ID: %#v", createdReport)
+	}
+	receiptPath := filepath.Join(s.dir, "invoice.pdf")
+	if err := os.WriteFile(receiptPath, []byte(receiptData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	created := run("expense", "create", "--policy-id", policyID, "--report-id", reportID, "--amount", "1250", "--currency", "EUR", "--merchant", "Software", "--date", "2026-10-18", "--category", category, "--tag", tag, "--receipt", receiptPath)
+	expenseID, ok := created["id"].(string)
+	if !ok || expenseID == "" || created["report_id"] != reportID || created["action"] != "created" {
+		t.Fatalf("workspace create lost destination: %#v", created)
+	}
+	view := run("expense", "view", "--expense-id", expenseID)
+	if view["id"] != expenseID || view["report_id"] != reportID || view["amount"] != json.Number("1250") || view["category"] != category || view["tag"] != tag || view["receipt"] == nil || view["reimbursable"] != true || view["billable"] != false {
+		t.Fatalf("workspace expense readback changed fields: %#v", view)
+	}
+	personal := run("expense", "create", "--amount", "500", "--currency", "EUR", "--merchant", "Unreported software", "--date", "2026-10-18")
+	personalID, ok := personal["id"].(string)
+	if !ok || personalID == "" {
+		t.Fatalf("personal expense ID missing: %#v", personal)
+	}
+	moved := run("expense", "move", "--expense-id", personalID, "--report-id", reportID)
+	if moved["id"] != personalID || moved["report_id"] != reportID || moved["action"] != "moved" {
+		t.Fatalf("move returned wrong destination: %#v", moved)
+	}
+	view = run("expense", "view", "--expense-id", personalID)
+	if view["report_id"] != reportID || view["amount"] != json.Number("500") || len(transactions) != 2 {
+		t.Fatalf("move readback failed or duplicated expenses: %#v", view)
+	}
+	report := run("report", "view", "--report-id", reportID)
+	if report["name"] != reportName || report["policy_id"] != policyID || report["state"] != "0" || report["status"] != "0" {
+		t.Fatalf("report no longer draft: %#v", report)
+	}
+	if got := strings.Join(writes, ","); got != "/CreateAppReport,/RequestMoney,/TrackExpense,/ChangeTransactionsReport" {
+		t.Fatalf("unexpected writes: %s", got)
 	}
 }
 

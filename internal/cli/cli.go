@@ -136,7 +136,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 	if selected.Name == "expense create" && !a.flags.Changed("currency") {
 		values["currency"] = settings.Currency
 	}
-	if _, ok := a.values["policy-id"]; ok && !a.flags.Changed("policy-id") {
+	inferReportPolicy := selected.Name == "expense create" && values["report-id"] != ""
+	if _, ok := a.values["policy-id"]; ok && !a.flags.Changed("policy-id") && !inferReportPolicy {
 		values["policy-id"] = settings.PolicyID
 	}
 	for _, flag := range selected.Flags {

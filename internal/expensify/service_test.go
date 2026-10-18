@@ -261,6 +261,9 @@ func TestReportWriteContracts(t *testing.T) {
 		t.Run(tc.verb, func(t *testing.T) {
 			service := testService(t, func(r *http.Request) map[string]any {
 				v := form(t, r)
+				if tc.verb == "create" && r.URL.Path == "/api/OpenApp" {
+					return ok(patch("policy_ABC", map[string]any{"id": "ABC", "autoReporting": false}))
+				}
 				if r.URL.Path != "/api/"+tc.endpoint || !decimalIDPattern.MatchString(v.Get(tc.idKey)) {
 					t.Fatalf("bad request %s %v", r.URL.Path, v)
 				}

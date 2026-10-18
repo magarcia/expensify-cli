@@ -76,6 +76,8 @@ func (s *Service) Execute(ctx context.Context, noun, verb string, values map[str
 		}{accountID, email}, nil
 	case "expense create":
 		return s.createExpense(ctx, values)
+	case "expense move":
+		return s.moveExpense(ctx, values)
 	case "expense edit":
 		return s.editExpense(ctx, values)
 	case "expense delete":
@@ -126,6 +128,9 @@ func (s *Service) viewExpense(ctx context.Context, values map[string]string) (Ex
 	id := values["expense-id"]
 	raw := object(state["transactions_"+id])
 	if raw == nil {
+		if values["report-id"] == "" {
+			return s.findExpense(ctx, id)
+		}
 		return Expense{}, notFound("Expense", id)
 	}
 	return expenseInSnapshot(state, id, raw)
@@ -152,7 +157,7 @@ func (s *Service) workspaces(ctx context.Context, verb string, values map[string
 }
 
 func (s *Service) namedItems(ctx context.Context, noun string, values map[string]string) ([]NamedItem, error) {
-	command, prefix := "OpenPolicyCategoriesPage", "policyCategories_"
+	command, prefix := "GetPolicyCategories", "policyCategories_"
 	if noun == "tag" {
 		command, prefix = "OpenPolicyTagsPage", "policyTags_"
 	}
@@ -164,7 +169,7 @@ func (s *Service) namedItems(ctx context.Context, noun string, values map[string
 	if !ok {
 		return nil, unexpected("workspace categories or tags are missing")
 	}
-	collection := object(raw)
+	collection := onyxObject(raw)
 	if collection == nil {
 		return nil, unexpected("workspace categories or tags are not an object")
 	}
@@ -233,6 +238,9 @@ func newIDs(bits ...uint) ([]string, error) {
 }
 
 func (s *Service) createExpense(ctx context.Context, values map[string]string) (Mutation, error) {
+	if values["policy-id"] != "" || values["report-id"] != "" {
+		return s.createWorkspaceExpense(ctx, values)
+	}
 	state, err := s.openApp(ctx)
 	if err != nil {
 		return Mutation{}, err
@@ -270,7 +278,7 @@ func (s *Service) createExpense(ctx context.Context, values map[string]string) (
 			params.Set(key, value)
 		}
 	}
-	if _, err := s.client.Call(ctx, "TrackExpense", params); err != nil {
+	if err := s.sendExpense(ctx, "TrackExpense", params, values["receipt"]); err != nil {
 		return Mutation{}, err
 	}
 	return Mutation{ID: ids[0], Action: "created"}, nil
@@ -334,6 +342,20 @@ func (s *Service) deleteExpense(ctx context.Context, values map[string]string) (
 }
 
 func (s *Service) createReport(ctx context.Context, values map[string]string) (Mutation, error) {
+	if policyID := values["policy-id"]; policyID != "" {
+		state, err := s.openApp(ctx)
+		if err != nil {
+			return Mutation{}, err
+		}
+		policy := object(state["policy_"+policyID])
+		if policy == nil {
+			return Mutation{}, notFound("Workspace", policyID)
+		}
+		// CreateAppReport has no option to defer an instant-submit policy.
+		if boolean(policy["autoReporting"]) && text(policy["autoReportingFrequency"]) == "instant" && text(policy["approvalMode"]) != "optional" {
+			return Mutation{}, fault.New("API-405", "This workspace can immediately submit newly created reports.", "Choose an existing draft report or change the workspace's submission schedule. No report was created.", 4)
+		}
+	}
 	ids, err := newIDs(53, 63, 63)
 	if err != nil {
 		return Mutation{}, err

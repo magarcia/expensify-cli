@@ -18,7 +18,7 @@ expensify expense create \
   --dry-run --no-input --output json
 ```
 
-Dry runs validate input and return the command parameters without authenticating or calling Expensify. Remove `--dry-run` to execute. Deletion, report submission, and report approval also require `--yes` when input isn't interactive:
+Dry runs validate local input and return the command parameters without authenticating or calling Expensify. They can't verify report state, ownership, workspace membership, permissions, or server behavior. Remove `--dry-run` to execute. Deletion, report submission, and report approval also require `--yes` when input isn't interactive:
 
 ```sh
 expensify report submit --report-id 456 --dry-run --no-input --output json
@@ -26,6 +26,77 @@ expensify report submit --report-id 456 --yes --no-input --output json
 ```
 
 The HTTP client renews an expired session and retries once after Expensify's `407` response. It doesn't automatically retry transport or server failures: a write might already have succeeded. After an ambiguous failure, inspect the resource before issuing another write.
+
+Use the CLI for all resource reads and writes. Browser automation is only for an explicitly requested login; don't fall back to browser writes when a resource command fails.
+
+## Choose where an expense goes
+
+`expense create` accepts a workspace, an existing draft report, or both:
+
+| Target | Behavior |
+| --- | --- |
+| `--policy-id POLICY_ID` | Create through your own policy chat and a draft report in that workspace. |
+| `--report-id REPORT_ID` | Add to your own existing draft and infer its workspace. |
+| Both flags | Use that draft; its workspace must match `--policy-id`. |
+| Neither flag | Use the configured `policy-id` default when present; otherwise track a personal expense. |
+
+The workspace default can come from environment variables, project configuration, or user settings. Inspect effective settings with `expensify config list`. Use an explicit report ID when the expense must belong to a particular monthly draft.
+
+Add `--receipt /private/path/receipt.pdf` to send a receipt with the original expense creation request. It accepts readable JPEG, PNG, or PDF files with matching extensions, up to 32 MiB. There isn't a second attach request to repeat if creation returns an ambiguous error; inspect the expense before retrying. Use `expense attach --expense-id ID --file FILE` for a receipt added to an existing expense.
+
+`expense move --expense-id EXPENSE_ID --report-id REPORT_ID` moves your own expense to your own draft. An unreported source is allowed. A source already in a report must be in your own draft in the same workspace. The CLI rejects submitted reports, another owner's reports, and workspace mismatches before sending the mutation.
+
+The CLI asks Expensify to defer immediate submission when creating a workspace expense. This doesn't change the workspace's scheduled submission rules; those can still submit the report later.
+
+## Monthly draft workflow
+
+Find the workspace and your existing draft before creating another report:
+
+```sh
+expensify workspace list --no-input --output llm
+expensify report list --policy-id YOUR_POLICY_ID --status drafts \
+  --no-input --output llm
+```
+
+If the monthly draft doesn't exist, create it:
+
+```sh
+expensify report create --policy-id YOUR_POLICY_ID --name 'October expenses' \
+  --no-input --output llm
+```
+
+Before creating a workspace report, the CLI reads its policy and refuses the known instant-submit combination: `autoReporting=true`, `autoReportingFrequency=instant`, and an `approvalMode` other than `optional`. The report-creation API has no option to defer that immediate submission. Other workspace submission schedules still apply.
+
+Use the selected or returned report ID below. Inspect its workspace, owner, and draft state, and list valid category and tag names:
+
+```sh
+expensify report view --report-id 456 --no-input --output llm
+expensify category list --policy-id YOUR_POLICY_ID --no-input --output llm
+expensify tag list --policy-id YOUR_POLICY_ID --no-input --output llm
+expensify expense list --report-id 456 --no-input --output llm
+```
+
+Replace `456`, `Meals`, `Project`, and the receipt path with your actual values. Preview the expense locally:
+
+```sh
+expensify expense create --policy-id YOUR_POLICY_ID --report-id 456 \
+  --amount 1250 --currency USD --merchant Cafe --date 2026-10-17 \
+  --category Meals --tag Project --receipt /private/path/receipt.jpg \
+  --dry-run --no-input --output llm
+```
+
+After reviewing the preview, send the same command without `--dry-run`:
+
+```sh
+expensify expense create --policy-id YOUR_POLICY_ID --report-id 456 \
+  --amount 1250 --currency USD --merchant Cafe --date 2026-10-17 \
+  --category Meals --tag Project --receipt /private/path/receipt.jpg \
+  --no-input --output llm
+expensify expense list --report-id 456 --no-input --output llm
+expensify report view --report-id 456 --no-input --output llm
+```
+
+Read back the expense's report, amount, category, tag, and receipt metadata. This workflow doesn't call `report submit`. The server checks still happen during the live command; a successful dry run doesn't prove the draft is writable.
 
 ## JSON contract
 
@@ -55,7 +126,13 @@ Expense and report lists return a page:
 
 `items` is always an array, including for empty results. Increase `--offset` by the returned `limit` while `has_more` is true. The default limit is `100`; supported values are `1` through `1000`.
 
-Views return one object. Mutations return `{"id":"123","action":"created"}` with the affected resource ID and action. The exact resource fields come from the [typed models](https://github.com/magarcia/expensify-cli/blob/main/internal/expensify/model.go):
+Views return one object. Mutations return an affected resource ID and action, for example `{"id":"123","action":"created"}`. Expense mutations can also include `report_id` when the destination is known:
+
+```json
+{"id":"123","action":"created","report_id":"456"}
+```
+
+Treat `report_id` as optional; don't infer that an expense is personal just because a mutation result omits it. Read the expense or report back when placement matters. The exact resource fields come from the [typed models](https://github.com/magarcia/expensify-cli/blob/main/internal/expensify/model.go):
 
 | Resource | Fields |
 | --- | --- |

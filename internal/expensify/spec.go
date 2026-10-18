@@ -42,10 +42,12 @@ func Specs() []Spec {
 			create[i].Default = time.Now().Format("2006-01-02")
 		}
 	}
+	create = append(create, policy, Flag{Name: "report-id", Usage: "Your draft expense report ID (infers workspace; must match --policy-id if both are set)"}, Flag{Name: "receipt", Usage: "JPEG, PNG, or PDF receipt to upload in the create request (up to 32 MiB)"})
 	return []Spec{
 		{Name: "expense list", Summary: "List expenses", Example: "expensify expense list --status unreported --limit 20", Flags: append(append(append([]Flag(nil), listFilters...), Flag{Name: "report-id", Usage: "Filter by report ID"}, Flag{Name: "merchant", Usage: "Filter by merchant name"}), page...)},
 		{Name: "expense view", Summary: "View one expense", Example: "expensify expense view --expense-id 123", Flags: []Flag{id("expense-id", "Expense transaction ID"), {Name: "report-id", Usage: "Parent report ID (opens the report before looking up the expense)"}}},
-		{Name: "expense create", Summary: "Track a personal expense", Example: "expensify expense create --amount 1250 --currency USD --merchant 'Cafe' --date 2026-10-17", Flags: create, Mutates: true},
+		{Name: "expense create", Summary: "Create an expense in your workspace, draft report, or personal account", Example: "expensify expense create --amount 1250 --currency USD --merchant 'Software' --report-id 456 --receipt receipt.pdf", Flags: create, Mutates: true},
+		{Name: "expense move", Summary: "Move your unreported or draft expense into your draft report", Example: "expensify expense move --expense-id 123 --report-id 456", Flags: []Flag{id("expense-id", "Expense transaction ID"), id("report-id", "Destination draft expense report ID")}, Mutates: true},
 		{Name: "expense edit", Summary: "Update an expense", Example: "expensify expense edit --expense-id 123 --merchant 'Cafe'", Flags: append([]Flag{id("expense-id", "Expense transaction ID")}, fields...), Mutates: true},
 		{Name: "expense delete", Summary: "Delete an expense", Example: "expensify expense delete --expense-id 123 --report-id 456 --yes", Flags: []Flag{id("expense-id", "Expense transaction ID"), id("report-id", "Parent report ID")}, Mutates: true, Confirm: true},
 		{Name: "expense attach", Summary: "Attach a receipt to an expense", Example: "expensify expense attach --expense-id 123 --file receipt.jpg", Flags: []Flag{id("expense-id", "Expense transaction ID"), id("file", "Receipt file path")}, Mutates: true},
@@ -161,29 +163,38 @@ func Validate(noun, verb string, values map[string]string) error {
 			return fault.Usage("--query must be a valid search filter JSON AST using eq, gte, lte, contains, and, or or.")
 		}
 	}
-	if path := values["file"]; path != "" {
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() {
-			return fault.Usage("--file must point to a readable regular receipt file.")
+	for _, flag := range []string{"file", "receipt"} {
+		if path := values[flag]; path != "" {
+			if err := validateReceiptFile(flag, path); err != nil {
+				return err
+			}
 		}
-		if info.Size() == 0 {
-			return fault.Usage("The receipt file is empty.")
-		}
-		if info.Size() > 32<<20 {
-			return fault.Usage("The receipt file exceeds the 32 MiB upload limit.")
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return fault.Usage("The receipt file cannot be read.")
-		}
-		defer file.Close()
-		header := make([]byte, 512)
-		n, _ := file.Read(header)
-		mime := http.DetectContentType(header[:n])
-		ext := strings.ToLower(filepath.Ext(path))
-		if !((ext == ".jpg" || ext == ".jpeg") && mime == "image/jpeg" || ext == ".png" && mime == "image/png" || ext == ".pdf" && mime == "application/pdf") {
-			return fault.Usage("The receipt must be a JPEG, PNG, or PDF file with a matching extension.")
-		}
+	}
+	return nil
+}
+
+func validateReceiptFile(flag, path string) error {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return fault.Usage(fmt.Sprintf("--%s must point to a readable regular receipt file.", flag))
+	}
+	if info.Size() == 0 {
+		return fault.Usage("The receipt file is empty.")
+	}
+	if info.Size() > 32<<20 {
+		return fault.Usage("The receipt file exceeds the 32 MiB upload limit.")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fault.Usage("The receipt file cannot be read.")
+	}
+	defer file.Close()
+	header := make([]byte, 512)
+	n, _ := file.Read(header)
+	mime := http.DetectContentType(header[:n])
+	ext := strings.ToLower(filepath.Ext(path))
+	if !((ext == ".jpg" || ext == ".jpeg") && mime == "image/jpeg" || ext == ".png" && mime == "image/png" || ext == ".pdf" && mime == "application/pdf") {
+		return fault.Usage("The receipt must be a JPEG, PNG, or PDF file with a matching extension.")
 	}
 	return nil
 }

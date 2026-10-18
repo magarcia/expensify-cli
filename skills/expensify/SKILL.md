@@ -15,6 +15,7 @@ Consult `expensify help auth`, `expensify help environment`, or `expensify help 
 
 - Run agent commands with `--no-input --output llm`. Read the labeled `- field: value` lines and `Record N` sections, including pagination metadata. Check the exit code; errors go to stderr.
 - Handle authentication through the CLI using an authorized login method. Never print credentials.
+- Use the CLI for resource writes. Browser automation is limited to an authorized login; don't use browser writes as a fallback when a CLI command fails.
 - Preview writes with `--dry-run`; use `--yes` only for actions the user authorized.
 - After a failed write, inspect the resource before retrying.
 
