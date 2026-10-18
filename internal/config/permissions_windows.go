@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,16 +80,27 @@ func makeFilePrivate(file *os.File) error {
 }
 
 func replacePrivateFile(source, target string) error {
-	for attempt := range 8 {
+	deadline := time.Now().Add(2 * time.Second)
+	delay := time.Millisecond
+	var firstErr error
+	for {
 		err := os.Rename(source, target)
-		temporarilyLocked := errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED)
-		if !temporarilyLocked || attempt == 7 {
+		transient := errors.Is(err, windows.ERROR_FILE_NOT_FOUND) ||
+			errors.Is(err, windows.ERROR_ACCESS_DENIED) ||
+			errors.Is(err, windows.ERROR_SHARING_VIOLATION)
+		if !transient {
 			return err
 		}
-		// Windows readers can temporarily prevent replacement without sharing deletion.
-		time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
+		if firstErr == nil {
+			firstErr = err
+		}
+		if time.Until(deadline) <= delay {
+			return firstErr
+		}
+		// Windows replacement errors can be transient; jitter separates competing writers.
+		time.Sleep(delay)
+		delay += time.Duration(rand.Int64N(int64(delay)))
 	}
-	return nil
 }
 
 func checkPrivatePermissions(path string, _ os.FileInfo) error {
