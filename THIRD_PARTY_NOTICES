@@ -63,10 +63,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-github.com/coder/websocket v1.8.12 (LICENSE.txt)
-Source: https://pkg.go.dev/github.com/coder/websocket@v1.8.12
+github.com/coder/websocket v1.8.15 (LICENSE.txt)
+Source: https://pkg.go.dev/github.com/coder/websocket@v1.8.15
 
-Copyright (c) 2023 Anmol Sethi <hi@nhooyr.io>
+Copyright (c) 2025 Coder
 
 Permission to use, copy, modify, and distribute this software for any
 purpose with or without fee is hereby granted, provided that the above
@@ -107,8 +107,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-github.com/godbus/dbus/v5 v5.2.2 (LICENSE)
-Source: https://pkg.go.dev/github.com/godbus/dbus/v5@v5.2.2
+github.com/godbus/dbus/v5 v5.2.4 (LICENSE)
+Source: https://pkg.go.dev/github.com/godbus/dbus/v5@v5.2.4
 
 Copyright (c) 2013, Georg Reinke (<guelfey at gmail dot com>), Google
 All rights reserved.
@@ -431,8 +431,8 @@ Copyright 2013 Google Inc. All Rights Reserved.
    limitations under the License.
 
 ========================================================================
-golang.org/x/sys v0.42.0 (LICENSE)
-Source: https://pkg.go.dev/golang.org/x/sys@v0.42.0
+golang.org/x/sys v0.49.0 (LICENSE)
+Source: https://pkg.go.dev/golang.org/x/sys@v0.49.0
 
 Copyright 2009 The Go Authors.
 
