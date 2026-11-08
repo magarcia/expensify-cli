@@ -121,7 +121,7 @@ Windows binaries aren't Authenticode signed. A checksum detects a damaged or mis
 
 ## Runtime requirements
 
-The binaries use the operating system support of their Go compiler. Go 1.26 requires macOS 12 or newer, Windows 10 / Windows Server 2016 or newer, and Linux kernel 3.2 or newer. The [Go minimum requirements](https://go.dev/wiki/MinimumRequirements) describe platform details. Your browser and keyring service may require a newer OS.
+The binaries use the operating system support of their Go compiler. Go 1.27 requires macOS 13 or newer, Windows 10 / Windows Server 2016 or newer, and Linux kernel 3.2 or newer. The [Go minimum requirements](https://go.dev/wiki/MinimumRequirements) describe platform details. Your browser and keyring service may require a newer OS.
 
 Automatic login supports Chrome, Chromium, Microsoft Edge, and Brave. It creates a separate temporary profile and waits for you to sign in. Safari and Firefox aren't supported for automatic credential capture. Manual prompts, private files, stdin, and environment credentials also work; see [authentication](authentication.md).
 

@@ -2,7 +2,7 @@
 
 GitHub Actions builds and publishes a release when a maintainer pushes a version tag. The workflow runs native checks on macOS, Linux, and Windows, then cross-compiles six binary archives, verifies their contents and checksums, and creates a GitHub release with generated notes.
 
-CI and release builds use the latest Go 1.26 patch; `go.mod` records the minimum supported Go version.
+CI and release builds use the latest Go 1.27 patch; `go.mod` records the minimum supported Go version.
 
 ## First publication
 
